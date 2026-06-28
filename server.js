@@ -16,10 +16,37 @@ const STREAMING_SENDERS = {
   globoplay: ['noreply@globo.com', 'globoplay@globo.com', 'no-reply@globoplay.com'],
 };
 
-function extractCode(text) {
-  const clean = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-  const noSpaces = clean.replace(/(\d)\s(?=\d)/g, '$1');
+function extractCode(text, html) {
+  // Tenta primeiro no texto puro
+  if (text && text.trim().length > 10) {
+    const cleanText = text.replace(/\s+/g, ' ');
+    const noSpaces = cleanText.replace(/(\d)\s(?=\d)/g, '$1');
+    const fromText = runPatterns(noSpaces);
+    if (fromText) return fromText;
+  }
 
+  // Se não achou, busca no HTML removendo tags mas preservando conteúdo
+  if (html) {
+    // Remove scripts e styles completamente
+    const noScript = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+    const noStyle = noScript.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+    // Troca tags de bloco por espaço
+    const withSpaces = noStyle.replace(/<\/(td|tr|div|p|span|table|br)[^>]*>/gi, ' ');
+    // Remove todas as outras tags
+    const clean = withSpaces.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+    // Remove espaços entre dígitos
+    const noSpaces = clean.replace(/(\d)\s(?=\d)/g, '$1');
+
+    console.log('HTML limpo (primeiros 500):', noSpaces.substring(0, 500));
+
+    const fromHtml = runPatterns(noSpaces);
+    if (fromHtml) return fromHtml;
+  }
+
+  return null;
+}
+
+function runPatterns(text) {
   const patterns = [
     /código[:\s]+(\d{6})\b/gi,
     /código[:\s]+(\d{4})\b/gi,
@@ -31,10 +58,9 @@ function extractCode(text) {
 
   for (const pattern of patterns) {
     pattern.lastIndex = 0;
-    const match = pattern.exec(noSpaces);
+    const match = pattern.exec(text);
     if (match) return match[1];
   }
-
   return null;
 }
 
@@ -98,21 +124,17 @@ function searchEmails(emailAddress, platform) {
 
                   const textContent = parsed.text || '';
                   const htmlContent = parsed.html || '';
-                  const combined = textContent + ' ' + htmlContent;
 
-                  // Log para debug
-                  console.log('--- EMAIL RECEBIDO ---');
                   console.log('De:', fromAddr);
-                  console.log('Para:', toAddresses);
-                  console.log('Texto puro (primeiros 500 chars):', textContent.substring(0, 500));
-                  console.log('----------------------');
+                  console.log('Texto puro length:', textContent.length);
+                  console.log('HTML length:', htmlContent.length);
 
-                  const code = extractCode(combined);
+                  const code = extractCode(textContent, htmlContent);
                   console.log('Código extraído:', code);
 
-                  res(code ? { code, subject: parsed.subject || '', preview: textContent.substring(0, 300) } : null);
+                  res(code ? { code, subject: parsed.subject || '' } : null);
                 } catch (e) {
-                  console.error('Erro ao parsear email:', e.message);
+                  console.error('Erro:', e.message);
                   res(null);
                 }
               });
@@ -125,7 +147,7 @@ function searchEmails(emailAddress, platform) {
               const results = await Promise.all(emailPromises);
               const found = results.find(r => r !== null) || null;
               imap.end();
-              resolve(found ? { found: true, code: found.code, subject: found.subject, preview: found.preview } : { found: false, code: null });
+              resolve(found ? { found: true, code: found.code, subject: found.subject } : { found: false, code: null });
             } catch (e) {
               imap.end();
               reject(e);
@@ -160,7 +182,7 @@ app.post('/api/buscar', async (req, res) => {
   try {
     const result = await searchEmails(email, platform);
     if (result.found && result.code) {
-      return res.json({ success: true, code: result.code, subject: result.subject, preview: result.preview });
+      return res.json({ success: true, code: result.code, subject: result.subject });
     } else {
       return res.json({ success: false, message: 'Nenhum código encontrado nas últimas 24h para este e-mail.' });
     }
