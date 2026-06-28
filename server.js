@@ -21,47 +21,71 @@ app.get('/', (req, res) => {
   } else if (fs.existsSync(rootIndex)) {
     res.sendFile(rootIndex);
   } else {
-    res.send('ClickFS Códigos online!');
+    res.send('ClickFS Codigos online!');
   }
 });
 
 const BEFORE_CODE = [
-  'código de acesso único',
-  'código de acesso',
-  'seu código',
-  'código único',
+  'codigo de acesso unico',
+  'codigo de acesso',
+  'seu codigo',
+  'codigo unico',
   'verification code',
   'access code',
   'one-time code',
-  'código:',
+  'codigo:',
   'code:',
   'PIN:',
   'OTP:',
 ];
 
-function extractCode(text) {
-  const cleaned = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+const INVALID_CODES = new Set([
+  '000000','111111','222222','333333','444444','555555',
+  '666666','777777','888888','999999','123456','012345',
+  '2020','2021','2022','2023','2024','2025','2026','2027','2028','2029',
+]);
 
+function isValidCode(code) {
+  if (INVALID_CODES.has(code)) return false;
+  if (/^(\d)\1+$/.test(code)) return false;
+  if (/^202[0-9]/.test(code) && code.length === 4) return false;
+  return true;
+}
+
+function extractCode(rawText, rawHtml) {
+  const text = (rawText || '').replace(/\s+/g, ' ');
+  
   for (const keyword of BEFORE_CODE) {
     const regex = new RegExp(keyword + '[\\s:]*([0-9]{4,8})', 'gi');
-    const match = regex.exec(cleaned);
-    if (match) return match[1];
+    const match = regex.exec(text);
+    if (match && isValidCode(match[1])) return match[1];
   }
 
   const sixDigit = /\b([0-9]{6})\b/g;
   let match;
-  const candidates = [];
-  while ((match = sixDigit.exec(cleaned)) !== null) {
-    candidates.push(match[1]);
-  }
-  for (const c of candidates) {
-    if (!c.match(/^202[0-9]$/)) return c;
+  while ((match = sixDigit.exec(text)) !== null) {
+    if (isValidCode(match[1])) return match[1];
   }
 
-  const otherDigit = /\b([0-9]{4}|[0-9]{8})\b/g;
-  while ((match = otherDigit.exec(cleaned)) !== null) {
-    const n = match[1];
-    if (!n.match(/^202[0-9]$/)) return n;
+  const html = (rawHtml || '').replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ');
+
+  for (const keyword of BEFORE_CODE) {
+    const regex = new RegExp(keyword + '[\\s:]*([0-9]{4,8})', 'gi');
+    const match2 = regex.exec(html);
+    if (match2 && isValidCode(match2[1])) return match2[1];
+  }
+
+  const sixDigit2 = /\b([0-9]{6})\b/g;
+  while ((match = sixDigit2.exec(html)) !== null) {
+    if (isValidCode(match[1])) return match[1];
+  }
+
+  const fourDigit = /\b([0-9]{4})\b/g;
+  while ((match = fourDigit.exec(text)) !== null) {
+    if (isValidCode(match[1])) return match[1];
   }
 
   return null;
@@ -109,10 +133,8 @@ function searchEmails(emailAddress, platform) {
                   return;
                 }
 
-                const textContent = parsed.text || '';
-                const htmlContent = parsed.html || '';
-                const combined = textContent + ' ' + htmlContent;
-                const code = extractCode(combined);
+                const code = extractCode(parsed.text, parsed.html);
+                console.log('Email para:', emailAddress, '| Codigo extraido:', code);
 
                 if (code && !found) {
                   found = true;
@@ -144,16 +166,16 @@ function searchEmails(emailAddress, platform) {
 
 app.post('/api/buscar', async (req, res) => {
   const { email, platform } = req.body;
-  if (!email || !platform) return res.status(400).json({ error: 'E-mail e plataforma são obrigatórios.' });
+  if (!email || !platform) return res.status(400).json({ error: 'E-mail e plataforma sao obrigatorios.' });
   const validPlatforms = ['netflix', 'disney', 'max', 'globoplay'];
-  if (!validPlatforms.includes(platform)) return res.status(400).json({ error: 'Plataforma inválida.' });
+  if (!validPlatforms.includes(platform)) return res.status(400).json({ error: 'Plataforma invalida.' });
 
   try {
     const result = await searchEmails(email, platform);
     if (result.found && result.code) {
       return res.json({ success: true, code: result.code });
     } else {
-      return res.json({ success: false, message: 'Nenhum código encontrado nas últimas 24h para este e-mail.' });
+      return res.json({ success: false, message: 'Nenhum codigo encontrado nas ultimas 24h para este e-mail.' });
     }
   } catch (err) {
     console.error('Erro IMAP:', err.message);
@@ -164,4 +186,4 @@ app.post('/api/buscar', async (req, res) => {
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`ClickFS server rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log('ClickFS server rodando na porta ' + PORT));
