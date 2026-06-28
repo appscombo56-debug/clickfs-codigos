@@ -19,14 +19,9 @@ const STREAMING_SENDERS = {
 function extractCode(text) {
   const clean = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 
-  // Código com espaços entre dígitos: "1 6 6 6 1 9"
-  const spaced6 = clean.match(/\b(\d)\s(\d)\s(\d)\s(\d)\s(\d)\s(\d)\b/);
-  if (spaced6) return spaced6.slice(1).join('');
+  // Remove espaços entre dígitos: "1 6 6 6 1 9" → "166619"
+  const noSpaces = clean.replace(/(\d)\s(?=\d)/g, '$1');
 
-  const spaced4 = clean.match(/\b(\d)\s(\d)\s(\d)\s(\d)\b/);
-  if (spaced4) return spaced4.slice(1).join('');
-
-  // Padrões normais
   const patterns = [
     /código[:\s]+(\d{6})\b/gi,
     /código[:\s]+(\d{4})\b/gi,
@@ -38,7 +33,7 @@ function extractCode(text) {
 
   for (const pattern of patterns) {
     pattern.lastIndex = 0;
-    const match = pattern.exec(clean);
+    const match = pattern.exec(noSpaces);
     if (match) return match[1];
   }
 
