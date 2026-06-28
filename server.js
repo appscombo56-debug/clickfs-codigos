@@ -17,31 +17,22 @@ const STREAMING_SENDERS = {
 };
 
 function extractCode(text, html) {
-  // Tenta no texto puro primeiro
   if (text && text.trim().length > 10) {
     const code = runPatterns(cleanText(text));
     if (code) return code;
   }
-
-  // Tenta no HTML
   if (html) {
     const code = runPatterns(cleanText(html));
     if (code) return code;
   }
-
   return null;
 }
 
 function cleanText(raw) {
-  // Remove URLs completamente (evita pegar números de dentro de URLs)
   let clean = raw.replace(/https?:\/\/[^\s"'>]+/g, ' ');
-  // Remove tags HTML
   clean = clean.replace(/<[^>]+>/g, ' ');
-  // Decodifica entidades HTML comuns
   clean = clean.replace(/&nbsp;/g, ' ').replace(/&zwnj;/g, '').replace(/&[a-z]+;/gi, ' ');
-  // Remove espaços entre dígitos: "1 6 6 6 1 9" → "166619"
   clean = clean.replace(/(\d)\s(?=\d)/g, '$1');
-  // Normaliza espaços
   clean = clean.replace(/\s+/g, ' ').trim();
   return clean;
 }
@@ -55,7 +46,6 @@ function runPatterns(text) {
     /\b(\d{6})\b/g,
     /\b(\d{4})\b/g,
   ];
-
   for (const pattern of patterns) {
     pattern.lastIndex = 0;
     const match = pattern.exec(text);
@@ -104,7 +94,8 @@ function searchEmails(emailAddress, platform) {
             return resolve({ found: false, code: null });
           }
 
-          const toFetch = results.slice(-5).reverse();
+          // Pega apenas o mais recente
+          const toFetch = results.slice(-1);
           const fetch = imap.fetch(toFetch, { bodies: '' });
           const emailPromises = [];
 
@@ -124,7 +115,6 @@ function searchEmails(emailAddress, platform) {
 
                   const textContent = parsed.text || '';
                   const htmlContent = parsed.html || '';
-
                   const code = extractCode(textContent, htmlContent);
                   console.log('De:', fromAddr, '| Código:', code);
 
