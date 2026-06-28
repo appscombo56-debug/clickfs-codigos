@@ -18,8 +18,6 @@ const STREAMING_SENDERS = {
 
 function extractCode(text) {
   const clean = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-
-  // Remove espaços entre dígitos: "1 6 6 6 1 9" → "166619"
   const noSpaces = clean.replace(/(\d)\s(?=\d)/g, '$1');
 
   const patterns = [
@@ -101,9 +99,20 @@ function searchEmails(emailAddress, platform) {
                   const textContent = parsed.text || '';
                   const htmlContent = parsed.html || '';
                   const combined = textContent + ' ' + htmlContent;
+
+                  // Log para debug
+                  console.log('--- EMAIL RECEBIDO ---');
+                  console.log('De:', fromAddr);
+                  console.log('Para:', toAddresses);
+                  console.log('Texto puro (primeiros 500 chars):', textContent.substring(0, 500));
+                  console.log('----------------------');
+
                   const code = extractCode(combined);
-                  res(code || null);
+                  console.log('Código extraído:', code);
+
+                  res(code ? { code, subject: parsed.subject || '', preview: textContent.substring(0, 300) } : null);
                 } catch (e) {
+                  console.error('Erro ao parsear email:', e.message);
                   res(null);
                 }
               });
@@ -113,10 +122,10 @@ function searchEmails(emailAddress, platform) {
 
           fetch.once('end', async () => {
             try {
-              const codes = await Promise.all(emailPromises);
-              const foundCode = codes.find(c => c !== null) || null;
+              const results = await Promise.all(emailPromises);
+              const found = results.find(r => r !== null) || null;
               imap.end();
-              resolve({ found: !!foundCode, code: foundCode });
+              resolve(found ? { found: true, code: found.code, subject: found.subject, preview: found.preview } : { found: false, code: null });
             } catch (e) {
               imap.end();
               reject(e);
@@ -151,7 +160,7 @@ app.post('/api/buscar', async (req, res) => {
   try {
     const result = await searchEmails(email, platform);
     if (result.found && result.code) {
-      return res.json({ success: true, code: result.code });
+      return res.json({ success: true, code: result.code, subject: result.subject, preview: result.preview });
     } else {
       return res.json({ success: false, message: 'Nenhum código encontrado nas últimas 24h para este e-mail.' });
     }
