@@ -2,14 +2,29 @@ const express = require('express');
 const cors = require('cors');
 const Imap = require('imap');
 const { simpleParser } = require('mailparser');
+const path = require('path');
+const fs = require('fs');
 require('dotenv').config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public'));
 
-// Streaming platforms config - remetentes esperados
+app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(__dirname));
+
+app.get('/', (req, res) => {
+  const publicIndex = path.join(__dirname, 'public', 'index.html');
+  const rootIndex = path.join(__dirname, 'index.html');
+  if (fs.existsSync(publicIndex)) {
+    res.sendFile(publicIndex);
+  } else if (fs.existsSync(rootIndex)) {
+    res.sendFile(rootIndex);
+  } else {
+    res.send('ClickFS Códigos online!');
+  }
+});
+
 const STREAMING_SENDERS = {
   netflix: ['info@account.netflix.com', 'netflix@mailer.netflix.com', 'no-reply@netflix.com'],
   disney: ['disneyplus@mail.disneyplus.com', 'no-reply@disneyplus.com', 'disneyplus@emails.disneyplus.com'],
@@ -17,12 +32,11 @@ const STREAMING_SENDERS = {
   globoplay: ['noreply@globo.com', 'globoplay@globo.com', 'no-reply@globoplay.com'],
 };
 
-// Palavras-chave para encontrar o código no e-mail
 const CODE_PATTERNS = [
-  /\b([A-Z0-9]{6,8})\b/g,           // Código maiúsculo 6-8 chars
-  /código[:\s]+([A-Z0-9]{4,8})/gi,   // "código: XXXXXX"
-  /code[:\s]+([A-Z0-9]{4,8})/gi,     // "code: XXXXXX"
-  /(\d{4,8})/g,                       // Somente números 4-8 dígitos
+  /\b([A-Z0-9]{6,8})\b/g,
+  /código[:\s]+([A-Z0-9]{4,8})/gi,
+  /code[:\s]+([A-Z0-9]{4,8})/gi,
+  /(\d{4,8})/g,
 ];
 
 function extractCode(text) {
@@ -49,88 +63,55 @@ function searchEmails(emailAddress, platform) {
     imap.once('ready', () => {
       imap.openBox('INBOX', false, (err, box) => {
         if (err) { imap.end(); return reject(err); }
-
-        // Busca e-mails das últimas 24h para o email do cliente
         const yesterday = new Date();
         yesterday.setDate(yesterday.getDate() - 1);
-
         const senders = STREAMING_SENDERS[platform] || [];
-        const searchCriteria = [
-          ['SINCE', yesterday],
-          ['TO', emailAddress],
-        ];
-
+        const searchCriteria = [['SINCE', yesterday], ['TO', emailAddress]];
         imap.search(searchCriteria, (err, results) => {
           if (err || !results || results.length === 0) {
             imap.end();
             return resolve({ found: false, code: null });
           }
-
-          // Pegar os mais recentes (últimos 5)
           const toFetch = results.slice(-5).reverse();
           const fetch = imap.fetch(toFetch, { bodies: '' });
           let found = false;
           let foundCode = null;
-
           fetch.on('message', (msg) => {
             if (found) return;
             msg.on('body', (stream) => {
               simpleParser(stream, (err, parsed) => {
                 if (err || found) return;
-
                 const fromAddr = parsed.from?.value?.[0]?.address?.toLowerCase() || '';
                 const isFromStreaming = senders.length === 0 || senders.some(s => fromAddr.includes(s.split('@')[1]));
-
                 if (isFromStreaming) {
                   const textContent = parsed.text || '';
                   const htmlContent = parsed.html || '';
                   const combined = textContent + ' ' + htmlContent.replace(/<[^>]+>/g, ' ');
                   const code = extractCode(combined);
-                  if (code) {
-                    found = true;
-                    foundCode = code;
-                  }
+                  if (code) { found = true; foundCode = code; }
                 }
               });
             });
           });
-
           fetch.once('end', () => {
-            setTimeout(() => {
-              imap.end();
-              resolve({ found: found, code: foundCode });
-            }, 500);
+            setTimeout(() => { imap.end(); resolve({ found, code: foundCode }); }, 500);
           });
-
-          fetch.once('error', (err) => {
-            imap.end();
-            reject(err);
-          });
+          fetch.once('error', (err) => { imap.end(); reject(err); });
         });
       });
     });
-
     imap.once('error', (err) => reject(err));
     imap.connect();
   });
 }
 
-// Rota principal de busca
 app.post('/api/buscar', async (req, res) => {
   const { email, platform } = req.body;
-
-  if (!email || !platform) {
-    return res.status(400).json({ error: 'E-mail e plataforma são obrigatórios.' });
-  }
-
+  if (!email || !platform) return res.status(400).json({ error: 'E-mail e plataforma são obrigatórios.' });
   const validPlatforms = ['netflix', 'disney', 'max', 'globoplay'];
-  if (!validPlatforms.includes(platform)) {
-    return res.status(400).json({ error: 'Plataforma inválida.' });
-  }
-
+  if (!validPlatforms.includes(platform)) return res.status(400).json({ error: 'Plataforma inválida.' });
   try {
     const result = await searchEmails(email, platform);
-
     if (result.found && result.code) {
       return res.json({ success: true, code: result.code });
     } else {
