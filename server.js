@@ -141,4 +141,32 @@ function searchEmails(emailAddress, platform) {
   });
 }
 
-app.post('/api/buscar', async (req,
+app.post('/api/buscar', async (req, res) => {
+  const { email, platform } = req.body;
+
+  if (!email || !platform) {
+    return res.status(400).json({ error: 'E-mail e plataforma são obrigatórios.' });
+  }
+
+  const validPlatforms = ['netflix', 'disney', 'max', 'globoplay'];
+  if (!validPlatforms.includes(platform)) {
+    return res.status(400).json({ error: 'Plataforma inválida.' });
+  }
+
+  try {
+    const result = await searchEmails(email, platform);
+    if (result.found && result.code) {
+      return res.json({ success: true, code: result.code });
+    } else {
+      return res.json({ success: false, message: 'Nenhum código encontrado nas últimas 24h para este e-mail.' });
+    }
+  } catch (err) {
+    console.error('Erro IMAP:', err.message);
+    return res.status(500).json({ error: 'Erro ao conectar ao servidor de e-mail. Tente novamente.' });
+  }
+});
+
+app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`ClickFS server rodando na porta ${PORT}`));
