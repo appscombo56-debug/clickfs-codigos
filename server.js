@@ -17,33 +17,33 @@ const STREAMING_SENDERS = {
 };
 
 function extractCode(text, html) {
-  // Tenta primeiro no texto puro
+  // Tenta no texto puro primeiro
   if (text && text.trim().length > 10) {
-    const cleanText = text.replace(/\s+/g, ' ');
-    const noSpaces = cleanText.replace(/(\d)\s(?=\d)/g, '$1');
-    const fromText = runPatterns(noSpaces);
-    if (fromText) return fromText;
+    const code = runPatterns(cleanText(text));
+    if (code) return code;
   }
 
-  // Se não achou, busca no HTML removendo tags mas preservando conteúdo
+  // Tenta no HTML
   if (html) {
-    // Remove scripts e styles completamente
-    const noScript = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
-    const noStyle = noScript.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
-    // Troca tags de bloco por espaço
-    const withSpaces = noStyle.replace(/<\/(td|tr|div|p|span|table|br)[^>]*>/gi, ' ');
-    // Remove todas as outras tags
-    const clean = withSpaces.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-    // Remove espaços entre dígitos
-    const noSpaces = clean.replace(/(\d)\s(?=\d)/g, '$1');
-
-    console.log('HTML limpo (primeiros 500):', noSpaces.substring(0, 500));
-
-    const fromHtml = runPatterns(noSpaces);
-    if (fromHtml) return fromHtml;
+    const code = runPatterns(cleanText(html));
+    if (code) return code;
   }
 
   return null;
+}
+
+function cleanText(raw) {
+  // Remove URLs completamente (evita pegar números de dentro de URLs)
+  let clean = raw.replace(/https?:\/\/[^\s"'>]+/g, ' ');
+  // Remove tags HTML
+  clean = clean.replace(/<[^>]+>/g, ' ');
+  // Decodifica entidades HTML comuns
+  clean = clean.replace(/&nbsp;/g, ' ').replace(/&zwnj;/g, '').replace(/&[a-z]+;/gi, ' ');
+  // Remove espaços entre dígitos: "1 6 6 6 1 9" → "166619"
+  clean = clean.replace(/(\d)\s(?=\d)/g, '$1');
+  // Normaliza espaços
+  clean = clean.replace(/\s+/g, ' ').trim();
+  return clean;
 }
 
 function runPatterns(text) {
@@ -125,12 +125,8 @@ function searchEmails(emailAddress, platform) {
                   const textContent = parsed.text || '';
                   const htmlContent = parsed.html || '';
 
-                  console.log('De:', fromAddr);
-                  console.log('Texto puro length:', textContent.length);
-                  console.log('HTML length:', htmlContent.length);
-
                   const code = extractCode(textContent, htmlContent);
-                  console.log('Código extraído:', code);
+                  console.log('De:', fromAddr, '| Código:', code);
 
                   res(code ? { code, subject: parsed.subject || '' } : null);
                 } catch (e) {
