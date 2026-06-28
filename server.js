@@ -7,7 +7,7 @@ require('dotenv').config();
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.static(__dirname));
 
 // Remetentes esperados por plataforma
 const STREAMING_SENDERS = {
@@ -17,18 +17,16 @@ const STREAMING_SENDERS = {
   globoplay: ['noreply@globo.com', 'globoplay@globo.com', 'no-reply@globoplay.com'],
 };
 
-// Padrões para extrair código — ordem importa: mais específico primeiro
 const CODE_PATTERNS = [
-  /código[:\s]+(\d{6})\b/gi,          // "código: 123456" — 6 dígitos
-  /código[:\s]+(\d{4})\b/gi,          // "código: 1234"   — 4 dígitos
-  /code[:\s]+(\d{6})\b/gi,            // "code: 123456"
-  /code[:\s]+(\d{4})\b/gi,            // "code: 1234"
-  /\b(\d{6})\b/g,                     // qualquer bloco de 6 dígitos solto
-  /\b(\d{4})\b/g,                     // qualquer bloco de 4 dígitos solto
+  /código[:\s]+(\d{6})\b/gi,
+  /código[:\s]+(\d{4})\b/gi,
+  /code[:\s]+(\d{6})\b/gi,
+  /code[:\s]+(\d{4})\b/gi,
+  /\b(\d{6})\b/g,
+  /\b(\d{4})\b/g,
 ];
 
 function extractCode(text) {
-  // Remove tags HTML e normaliza espaços antes de aplicar os regex
   const clean = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
   for (const pattern of CODE_PATTERNS) {
     pattern.lastIndex = 0;
@@ -52,7 +50,7 @@ function searchEmails(emailAddress, platform) {
     const imap = new Imap({
       user: process.env.IMAP_USER,
       password: process.env.IMAP_PASS,
-      host: process.env.IMAP_HOST || 'imail.hostinger.com',
+      host: process.env.IMAP_HOST || 'imap.hostinger.com',
       port: parseInt(process.env.IMAP_PORT) || 993,
       tls: true,
       tlsOptions: { rejectUnauthorized: false },
@@ -78,10 +76,8 @@ function searchEmails(emailAddress, platform) {
             return resolve({ found: false, code: null });
           }
 
-          // Pegar os 5 mais recentes
           const toFetch = results.slice(-5).reverse();
           const fetch = imap.fetch(toFetch, { bodies: '' });
-
           const emailPromises = [];
 
           fetch.on('message', (msg) => {
@@ -90,28 +86,18 @@ function searchEmails(emailAddress, platform) {
                 try {
                   const parsed = await parseEmailAsync(stream);
 
-                  // Verificar destinatário: confirmar que o TO realmente contém o email do cliente
                   const toAddresses = (parsed.to?.value || []).map(v => v.address.toLowerCase());
                   const isForThisUser = toAddresses.some(addr => addr === emailAddress.toLowerCase());
+                  if (!isForThisUser) return res(null);
 
-                  if (!isForThisUser) {
-                    return res(null); // e-mail não é para esse usuário
-                  }
-
-                  // Verificar remetente da plataforma correta
                   const fromAddr = parsed.from?.value?.[0]?.address?.toLowerCase() || '';
                   const isFromStreaming = senders.length === 0 || senders.some(s => fromAddr.includes(s.split('@')[1]));
+                  if (!isFromStreaming) return res(null);
 
-                  if (!isFromStreaming) {
-                    return res(null); // e-mail não é da plataforma certa
-                  }
-
-                  // Extrair código
                   const textContent = parsed.text || '';
                   const htmlContent = parsed.html || '';
                   const combined = textContent + ' ' + htmlContent;
                   const code = extractCode(combined);
-
                   res(code || null);
                 } catch (e) {
                   res(null);
@@ -123,7 +109,6 @@ function searchEmails(emailAddress, platform) {
 
           fetch.once('end', async () => {
             try {
-              // Aguarda TODOS os e-mails serem parseados antes de responder
               const codes = await Promise.all(emailPromises);
               const foundCode = codes.find(c => c !== null) || null;
               imap.end();
@@ -147,7 +132,6 @@ function searchEmails(emailAddress, platform) {
   });
 }
 
-// Rota principal
 app.post('/api/buscar', async (req, res) => {
   const { email, platform } = req.body;
 
