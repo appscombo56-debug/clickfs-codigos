@@ -25,26 +25,45 @@ app.get('/', (req, res) => {
   }
 });
 
-const STREAMING_SENDERS = {
-  netflix: ['info@account.netflix.com', 'netflix@mailer.netflix.com', 'no-reply@netflix.com'],
-  disney: ['disneyplus@mail.disneyplus.com', 'no-reply@disneyplus.com', 'disneyplus@emails.disneyplus.com'],
-  max: ['no-reply@max.com', 'hbomax@mail.hbomax.com', 'max@email.max.com'],
-  globoplay: ['noreply@globo.com', 'globoplay@globo.com', 'no-reply@globoplay.com'],
-};
-
-const CODE_PATTERNS = [
-  /\b([A-Z0-9]{6,8})\b/g,
-  /código[:\s]+([A-Z0-9]{4,8})/gi,
-  /code[:\s]+([A-Z0-9]{4,8})/gi,
-  /(\d{4,8})/g,
+const BEFORE_CODE = [
+  'código de acesso único',
+  'código de acesso',
+  'seu código',
+  'código único',
+  'verification code',
+  'access code',
+  'one-time code',
+  'código:',
+  'code:',
+  'PIN:',
+  'OTP:',
 ];
 
 function extractCode(text) {
-  for (const pattern of CODE_PATTERNS) {
-    pattern.lastIndex = 0;
-    const match = pattern.exec(text);
+  const cleaned = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+  for (const keyword of BEFORE_CODE) {
+    const regex = new RegExp(keyword + '[\\s:]*([0-9]{4,8})', 'gi');
+    const match = regex.exec(cleaned);
     if (match) return match[1];
   }
+
+  const sixDigit = /\b([0-9]{6})\b/g;
+  let match;
+  const candidates = [];
+  while ((match = sixDigit.exec(cleaned)) !== null) {
+    candidates.push(match[1]);
+  }
+  for (const c of candidates) {
+    if (!c.match(/^202[0-9]$/)) return c;
+  }
+
+  const otherDigit = /\b([0-9]{4}|[0-9]{8})\b/g;
+  while ((match = otherDigit.exec(cleaned)) !== null) {
+    const n = match[1];
+    if (!n.match(/^202[0-9]$/)) return n;
+  }
+
   return null;
 }
 
@@ -53,7 +72,7 @@ function searchEmails(emailAddress, platform) {
     const imap = new Imap({
       user: process.env.IMAP_USER,
       password: process.env.IMAP_PASS,
-      host: process.env.IMAP_HOST || 'imail.hostinger.com',
+      host: process.env.IMAP_HOST || 'imap.hostinger.com',
       port: parseInt(process.env.IMAP_PORT) || 993,
       tls: true,
       tlsOptions: { rejectUnauthorized: false },
@@ -61,45 +80,63 @@ function searchEmails(emailAddress, platform) {
     });
 
     imap.once('ready', () => {
-      imap.openBox('INBOX', false, (err, box) => {
+      imap.openBox('INBOX', false, (err) => {
         if (err) { imap.end(); return reject(err); }
+
         const yesterday = new Date();
         yesterday.setDate(yesterday.getDate() - 1);
-        const senders = STREAMING_SENDERS[platform] || [];
+
         const searchCriteria = [['SINCE', yesterday], ['TO', emailAddress]];
+
         imap.search(searchCriteria, (err, results) => {
           if (err || !results || results.length === 0) {
             imap.end();
             return resolve({ found: false, code: null });
           }
-          const toFetch = results.slice(-5).reverse();
+
+          const toFetch = results.slice(-10).reverse();
           const fetch = imap.fetch(toFetch, { bodies: '' });
           let found = false;
           let foundCode = null;
+          let pending = toFetch.length;
+
           fetch.on('message', (msg) => {
-            if (found) return;
             msg.on('body', (stream) => {
               simpleParser(stream, (err, parsed) => {
-                if (err || found) return;
-                const fromAddr = parsed.from?.value?.[0]?.address?.toLowerCase() || '';
-                const isFromStreaming = senders.length === 0 || senders.some(s => fromAddr.includes(s.split('@')[1]));
-                if (isFromStreaming) {
-                  const textContent = parsed.text || '';
-                  const htmlContent = parsed.html || '';
-                  const combined = textContent + ' ' + htmlContent.replace(/<[^>]+>/g, ' ');
-                  const code = extractCode(combined);
-                  if (code) { found = true; foundCode = code; }
+                pending--;
+                if (err || found) {
+                  if (pending === 0) { imap.end(); resolve({ found, code: foundCode }); }
+                  return;
+                }
+
+                const textContent = parsed.text || '';
+                const htmlContent = parsed.html || '';
+                const combined = textContent + ' ' + htmlContent;
+                const code = extractCode(combined);
+
+                if (code && !found) {
+                  found = true;
+                  foundCode = code;
+                }
+
+                if (pending === 0) {
+                  setTimeout(() => { imap.end(); resolve({ found, code: foundCode }); }, 300);
                 }
               });
             });
           });
+
           fetch.once('end', () => {
-            setTimeout(() => { imap.end(); resolve({ found, code: foundCode }); }, 500);
+            setTimeout(() => {
+              if (!found) { imap.end(); resolve({ found: false, code: null }); }
+            }, 3000);
           });
+
           fetch.once('error', (err) => { imap.end(); reject(err); });
         });
       });
     });
+
     imap.once('error', (err) => reject(err));
     imap.connect();
   });
@@ -110,6 +147,7 @@ app.post('/api/buscar', async (req, res) => {
   if (!email || !platform) return res.status(400).json({ error: 'E-mail e plataforma são obrigatórios.' });
   const validPlatforms = ['netflix', 'disney', 'max', 'globoplay'];
   if (!validPlatforms.includes(platform)) return res.status(400).json({ error: 'Plataforma inválida.' });
+
   try {
     const result = await searchEmails(email, platform);
     if (result.found && result.code) {
