@@ -36,7 +36,6 @@
       position: relative;
     }
 
-    /* Grid background */
     body::before {
       content: '';
       position: fixed;
@@ -49,7 +48,6 @@
       z-index: 0;
     }
 
-    /* Radial glow center */
     body::after {
       content: '';
       position: fixed;
@@ -71,7 +69,6 @@
       padding: 20px;
     }
 
-    /* Header */
     .header {
       text-align: center;
       margin-bottom: 48px;
@@ -127,7 +124,6 @@
       letter-spacing: 0.5px;
     }
 
-    /* Card */
     .card {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -149,7 +145,6 @@
       opacity: 0.6;
     }
 
-    /* Platforms */
     .section-label {
       font-size: 11px;
       font-weight: 600;
@@ -211,7 +206,6 @@
       font-size: 20px;
     }
 
-    /* Input */
     .input-group {
       margin-bottom: 24px;
     }
@@ -252,7 +246,6 @@
       color: var(--muted);
     }
 
-    /* Button */
     .btn-buscar {
       width: 100%;
       background: linear-gradient(135deg, var(--accent2), var(--accent));
@@ -275,10 +268,6 @@
       box-shadow: 0 8px 30px rgba(0,119,255,0.4);
     }
 
-    .btn-buscar:active:not(:disabled) {
-      transform: translateY(0);
-    }
-
     .btn-buscar:disabled {
       opacity: 0.6;
       cursor: not-allowed;
@@ -291,7 +280,6 @@
       gap: 10px;
     }
 
-    /* Spinner */
     .spinner {
       width: 18px;
       height: 18px;
@@ -302,7 +290,7 @@
       display: none;
     }
 
-    /* Result */
+    /* Result Box */
     .result-box {
       margin-top: 24px;
       border-radius: 14px;
@@ -334,10 +322,10 @@
 
     .result-code {
       font-family: 'Orbitron', monospace;
-      font-size: 32px;
+      font-size: 24px;
       font-weight: 900;
       color: var(--success);
-      letter-spacing: 4px;
+      letter-spacing: 2px;
       text-shadow: 0 0 20px rgba(0,255,179,0.4);
       margin-bottom: 8px;
     }
@@ -345,27 +333,57 @@
     .result-msg {
       font-size: 13px;
       color: var(--muted);
+      margin-bottom: 14px;
     }
 
-    .result-box.error .result-msg { color: var(--error); opacity: 0.8; }
+    /* Container de Botões */
+    .action-buttons {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
 
-    .copy-btn {
-      margin-top: 14px;
+    .copy-btn, .link-btn {
+      flex: 1;
       background: rgba(0,255,179,0.1);
       border: 1px solid rgba(0,255,179,0.2);
       border-radius: 8px;
-      padding: 8px 16px;
+      padding: 10px 14px;
       color: var(--success);
       font-family: 'Syne', sans-serif;
       font-size: 12px;
       font-weight: 600;
       cursor: pointer;
+      text-align: center;
+      text-decoration: none;
       transition: all 0.2s;
     }
 
     .copy-btn:hover { background: rgba(0,255,179,0.15); }
 
-    /* Footer */
+    .link-btn {
+      background: linear-gradient(135deg, #e50914, #b20710);
+      border: none;
+      color: #fff;
+    }
+    .link-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+
+    /* Visualizador do E-mail Original (Iframe) */
+    .email-preview-container {
+      margin-top: 14px;
+      border-top: 1px solid var(--border);
+      padding-top: 14px;
+      display: none;
+    }
+
+    .email-iframe {
+      width: 100%;
+      height: 320px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff; /* Fundo branco para simular o e-mail original */
+    }
+
     .footer {
       text-align: center;
       margin-top: 32px;
@@ -374,16 +392,6 @@
       animation: fadeUp 0.6s ease 0.2s both;
     }
 
-    .footer a {
-      color: var(--accent);
-      text-decoration: none;
-      opacity: 0.7;
-      transition: opacity 0.2s;
-    }
-
-    .footer a:hover { opacity: 1; }
-
-    /* Scan line animation */
     .scanning-bar {
       display: none;
       height: 2px;
@@ -393,7 +401,6 @@
       animation: scanLine 1.5s ease-in-out infinite;
     }
 
-    /* Animations */
     @keyframes fadeDown {
       from { opacity: 0; transform: translateY(-20px); }
       to { opacity: 1; transform: translateY(0); }
@@ -409,9 +416,7 @@
       50% { opacity: 0.5; box-shadow: 0 0 4px var(--accent); }
     }
 
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
     @keyframes scanLine {
       0% { transform: scaleX(0); opacity: 0; }
@@ -419,10 +424,9 @@
       100% { transform: scaleX(0); opacity: 0; }
     }
 
-    /* Responsive */
     @media (max-width: 480px) {
       .card { padding: 24px 20px; }
-      .platforms { grid-template-columns: repeat(2, 1fr); }
+      .action-buttons { flex-direction: column; }
     }
   </style>
 </head>
@@ -473,12 +477,23 @@
       <div class="scanning-bar" id="scanningBar"></div>
 
       <div class="result-box" id="resultBox">
-        <p class="result-label" id="resultLabel">Código encontrado</p>
+        <p class="result-label" id="resultLabel">Resultado</p>
         <div class="result-code" id="resultCode"></div>
         <p class="result-msg" id="resultMsg"></p>
-        <button class="copy-btn" id="copyBtn" onclick="copiarCodigo()" style="display:none">
-          📋 Copiar código
-        </button>
+        
+        <div class="action-buttons">
+          <button class="copy-btn" id="copyBtn" onclick="copiarCodigo()" style="display:none">
+            📋 Copiar código
+          </button>
+          <a class="link-btn" id="linkBtn" href="#" target="_blank" style="display:none">
+            🔴 Abrir Link Direto
+          </a>
+        </div>
+
+        <div class="email-preview-container" id="emailPreviewContainer">
+          <p class="section-label" style="margin-bottom: 6px;">Mensagem Original:</p>
+          <iframe class="email-iframe" id="emailIframe"></iframe>
+        </div>
       </div>
     </div>
 
@@ -512,31 +527,57 @@
     }
 
     function hideResult() {
-      const box = document.getElementById('resultBox');
-      box.style.display = 'none';
+      document.getElementById('resultBox').style.display = 'none';
     }
 
-    function showResult(success, code, msg) {
+    function showResult(success, code, msg, link = null, htmlEmail = null) {
       const box = document.getElementById('resultBox');
       const label = document.getElementById('resultLabel');
       const codeEl = document.getElementById('resultCode');
       const msgEl = document.getElementById('resultMsg');
       const copyBtn = document.getElementById('copyBtn');
+      const linkBtn = document.getElementById('linkBtn');
+      const previewContainer = document.getElementById('emailPreviewContainer');
+      const iframe = document.getElementById('emailIframe');
 
       box.className = 'result-box ' + (success ? 'success' : 'error');
       box.style.display = 'block';
 
       if (success) {
-        label.textContent = '✅ Código encontrado';
-        codeEl.textContent = code;
+        label.textContent = '✅ Sucesso';
+        codeEl.textContent = code || 'LINK ENCONTRADO';
         codeEl.style.display = 'block';
-        msgEl.textContent = 'Código válido para acesso. Use rapidamente!';
-        copyBtn.style.display = 'inline-block';
+        msgEl.textContent = msg || 'Abaixo estão as opções e mensagem do e-mail.';
+        
+        // Exibe botão de copiar se houver código em texto simples
+        copyBtn.style.display = (code && code !== 'LINK ENCONTRADO') ? 'inline-block' : 'none';
+        
+        // Configura o Link do Botão Vermelho (caso o backend extraia)
+        if (link) {
+          linkBtn.href = link;
+          linkBtn.style.display = 'inline-block';
+        } else {
+          linkBtn.style.display = 'none';
+        }
+
+        // Renderiza o HTML do e-mail dentro do iframe
+        if (htmlEmail) {
+          previewContainer.style.display = 'block';
+          const doc = iframe.contentDocument || iframe.contentWindow.document;
+          doc.open();
+          doc.write(htmlEmail);
+          doc.close();
+        } else {
+          previewContainer.style.display = 'none';
+        }
+
       } else {
         label.textContent = '❌ Não encontrado';
         codeEl.style.display = 'none';
-        msgEl.textContent = msg || 'Nenhum código encontrado. Verifique o e-mail e tente novamente.';
+        msgEl.textContent = msg || 'Nenhum dado encontrado.';
         copyBtn.style.display = 'none';
+        linkBtn.style.display = 'none';
+        previewContainer.style.display = 'none';
       }
     }
 
@@ -580,8 +621,9 @@
 
         const data = await response.json();
 
-        if (data.success && data.code) {
-          showResult(true, data.code);
+        if (data.success) {
+          // O seu backend deve enviar propriedades como: data.code, data.link, data.html_email
+          showResult(true, data.code, data.message, data.link, data.html_email);
         } else {
           showResult(false, null, data.message || data.error || 'Código não encontrado.');
         }
@@ -592,7 +634,6 @@
       }
     }
 
-    // Enter key support
     document.getElementById('emailInput').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') buscarCodigo();
     });
