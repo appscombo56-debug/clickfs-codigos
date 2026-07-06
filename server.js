@@ -2,54 +2,70 @@ const express = require('express');
 const cors = require('cors');
 const Imap = require('imap');
 const { simpleParser } = require('mailparser');
+const axios = require('axios'); // IMPORTANTE: Nova dependência adicionada
 require('dotenv').config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static(__dirname));
+app.use(express.static('public'));
 
+// Remetentes esperados por plataforma
 const STREAMING_SENDERS = {
   netflix:   ['info@account.netflix.com', 'netflix@mailer.netflix.com', 'no-reply@netflix.com'],
-  disney:    ['disneyplus@mail.disneyplus.com', 'no-reply@disneyplus.com', 'disneyplus@emails.disneyplus.com', 'disneyplus@trx.mail2.disneyplus.com'],
+  disney:    ['disneyplus@mail.disneyplus.com', 'no-reply@disneyplus.com', 'disneyplus@emails.disneyplus.com'],
   max:       ['no-reply@max.com', 'hbomax@mail.hbomax.com', 'max@email.max.com'],
   globoplay: ['noreply@globo.com', 'globoplay@globo.com', 'no-reply@globoplay.com'],
 };
 
-function extractCode(text, html) {
-  if (text && text.trim().length > 10) {
-    const code = runPatterns(cleanText(text));
-    if (code) return code;
-  }
-  if (html) {
-    const code = runPatterns(cleanText(html));
-    if (code) return code;
+// Padrões para extrair código — ordem importa: mais específico primeiro
+const CODE_PATTERNS = [
+  /código[:\s]+(\d{6})\b/gi,          // "código: 123456" — 6 dígitos
+  /código[:\s]+(\d{4})\b/gi,          // "código: 1234"   — 4 dígitos
+  /code[:\s]+(\d{6})\b/gi,            // "code: 123456"
+  /code[:\s]+(\d{4})\b/gi,            // "code: 1234"
+  /\b(\d{6})\b/g,                     // qualquer bloco de 6 dígitos solto
+  /\b(\d{4})\b/g,                     // qualquer bloco de 4 dígitos solto
+];
+
+function extractCode(text) {
+  // Remove tags HTML e normaliza espaços antes de aplicar os regex
+  const clean = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  for (const pattern of CODE_PATTERNS) {
+    pattern.lastIndex = 0;
+    const match = pattern.exec(clean);
+    if (match) return match[1];
   }
   return null;
 }
 
-function cleanText(raw) {
-  let clean = raw.replace(/https?:\/\/[^\s"'>]+/g, ' ');
-  clean = clean.replace(/<[^>]+>/g, ' ');
-  clean = clean.replace(/&nbsp;/g, ' ').replace(/&zwnj;/g, '').replace(/&[a-z]+;/gi, ' ');
-  clean = clean.replace(/(\d)\s(?=\d)/g, '$1');
-  clean = clean.replace(/\s+/g, ' ').trim();
-  return clean;
-}
+// NOVA FUNÇÃO: Trata e-mails que necessitam de clique em link (ex: Netflix)
+async function handleLinkClicking(htmlContent, platform) {
+  try {
+    if (platform === 'netflix') {
+      // Procura pelo link do botão vermelho "Receber código"
+      const linkMatch = htmlContent.match(/href="([^"]*netflix\.com\/account\/travel\/verify[^"]*)"/i);
+      
+      if (linkMatch && linkMatch[1]) {
+        // Substitui entidades HTML comuns de URLs de e-mail (como &amp;)
+        const urlFinal = linkMatch[1].replace(/&amp;/g, '&');
+        
+        // O robô faz o "clique" em segundo plano na URL da Netflix
+        const response = await axios.get(urlFinal, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+          timeout: 8000
+        });
 
-function runPatterns(text) {
-  const patterns = [
-    /código[:\s]+(\d{6})\b/gi,
-    /código[:\s]+(\d{4})\b/gi,
-    /code[:\s]+(\d{6})\b/gi,
-    /code[:\s]+(\d{4})\b/gi,
-    /\b(\d{6})\b/g,
-    /\b(\d{4})\b/g,
-  ];
-  for (const pattern of patterns) {
-    pattern.lastIndex = 0;
-    const match = pattern.exec(text);
-    if (match) return match[1];
+        // Tenta extrair o código de dentro da página da web que abriu
+        if (response.data) {
+          const codeFromPage = extractCode(response.data);
+          if (codeFromPage) return codeFromPage;
+        }
+      }
+    }
+    // Caso adicione outras plataformas com link no futuro, coloque o "else if" aqui
+  } catch (error) {
+    console.error(`Erro ao tentar acessar o link de clique da plataforma ${platform}:`, error.message);
   }
   return null;
 }
@@ -68,7 +84,7 @@ function searchEmails(emailAddress, platform) {
     const imap = new Imap({
       user: process.env.IMAP_USER,
       password: process.env.IMAP_PASS,
-      host: process.env.IMAP_HOST || 'imap.hostinger.com',
+      host: process.env.IMAP_HOST || 'imail.hostinger.com',
       port: parseInt(process.env.IMAP_PORT) || 993,
       tls: true,
       tlsOptions: { rejectUnauthorized: false },
@@ -94,9 +110,10 @@ function searchEmails(emailAddress, platform) {
             return resolve({ found: false, code: null });
           }
 
-          // Pega apenas o mais recente
-          const toFetch = results.slice(-1);
+          // Pegar os 5 mais recentes
+          const toFetch = results.slice(-5).reverse();
           const fetch = imap.fetch(toFetch, { bodies: '' });
+
           const emailPromises = [];
 
           fetch.on('message', (msg) => {
@@ -105,22 +122,36 @@ function searchEmails(emailAddress, platform) {
                 try {
                   const parsed = await parseEmailAsync(stream);
 
+                  // Verificar destinatário: confirmar que o TO realmente contém o email do cliente
                   const toAddresses = (parsed.to?.value || []).map(v => v.address.toLowerCase());
                   const isForThisUser = toAddresses.some(addr => addr === emailAddress.toLowerCase());
-                  if (!isForThisUser) return res(null);
 
+                  if (!isForThisUser) {
+                    return res(null); // e-mail não é para esse usuário
+                  }
+
+                  // Verificar remetente da plataforma correta
                   const fromAddr = parsed.from?.value?.[0]?.address?.toLowerCase() || '';
                   const isFromStreaming = senders.length === 0 || senders.some(s => fromAddr.includes(s.split('@')[1]));
-                  if (!isFromStreaming) return res(null);
+
+                  if (!isFromStreaming) {
+                    return res(null); // e-mail não é da plataforma certa
+                  }
 
                   const textContent = parsed.text || '';
                   const htmlContent = parsed.html || '';
-                  const code = extractCode(textContent, htmlContent);
-                  console.log('De:', fromAddr, '| Código:', code);
 
-                  res(code ? { code, subject: parsed.subject || '' } : null);
+                  // NOVO: Primeiro tenta verificar se há links que exigem clique automatizado
+                  let code = await handleLinkClicking(htmlContent, platform);
+
+                  // Se não encontrou código por link de clique, tenta a extração por texto normal padrão
+                  if (!code) {
+                    const combined = textContent + ' ' + htmlContent;
+                    code = extractCode(combined);
+                  }
+
+                  res(code || null);
                 } catch (e) {
-                  console.error('Erro:', e.message);
                   res(null);
                 }
               });
@@ -130,10 +161,11 @@ function searchEmails(emailAddress, platform) {
 
           fetch.once('end', async () => {
             try {
-              const results = await Promise.all(emailPromises);
-              const found = results.find(r => r !== null) || null;
+              // Aguarda TODOS os e-mails serem parseados antes de responder
+              const codes = await Promise.all(emailPromises);
+              const foundCode = codes.find(c => c !== null) || null;
               imap.end();
-              resolve(found ? { found: true, code: found.code, subject: found.subject } : { found: false, code: null });
+              resolve({ found: !!foundCode, code: foundCode });
             } catch (e) {
               imap.end();
               reject(e);
@@ -153,6 +185,7 @@ function searchEmails(emailAddress, platform) {
   });
 }
 
+// Rota principal
 app.post('/api/buscar', async (req, res) => {
   const { email, platform } = req.body;
 
@@ -168,7 +201,7 @@ app.post('/api/buscar', async (req, res) => {
   try {
     const result = await searchEmails(email, platform);
     if (result.found && result.code) {
-      return res.json({ success: true, code: result.code, subject: result.subject });
+      return res.json({ success: true, code: result.code });
     } else {
       return res.json({ success: false, message: 'Nenhum código encontrado nas últimas 24h para este e-mail.' });
     }
