@@ -123,7 +123,15 @@ async function buscarCodigoViaLink(htmlContent, platform) {
     }
   });
 
-  if (!link || !linkEhConfiavel(link, platform)) return null;
+  if (!link) {
+    console.log(`[DEBUG][${platform}] Nenhum link de "receber código" encontrado no HTML do e-mail.`);
+    return null;
+  }
+  if (!linkEhConfiavel(link, platform)) {
+    console.log(`[DEBUG][${platform}] Link encontrado, mas domínio NÃO confiável: ${link}`);
+    return null;
+  }
+  console.log(`[DEBUG][${platform}] Link de código encontrado e confiável: ${link}`);
 
   try {
     const resp = await axios.get(link, {
@@ -176,6 +184,7 @@ function searchEmails(emailAddress, platform) {
         ];
 
         imap.search(searchCriteria, (err, results) => {
+          console.log(`[DEBUG][${platform}] Busca IMAP (TO=${emailAddress}, desde ${yesterday.toISOString()}) retornou ${results ? results.length : 0} e-mail(s).`);
           if (err || !results || results.length === 0) {
             imap.end();
             return resolve({ found: false, code: null });
@@ -205,6 +214,8 @@ function searchEmails(emailAddress, platform) {
                   const fromAddr = parsed.from?.value?.[0]?.address?.toLowerCase() || '';
                   const isFromStreaming = senders.length === 0 || senders.some(s => fromAddr.includes(s.split('@')[1]));
 
+                  console.log(`[DEBUG][${platform}] E-mail de "${fromAddr}" | assunto: "${parsed.subject}" | bate remetente esperado? ${isFromStreaming}`);
+
                   if (!isFromStreaming) {
                     return res(null); // e-mail não é da plataforma certa
                   }
@@ -213,12 +224,18 @@ function searchEmails(emailAddress, platform) {
                   const textContent = parsed.text || '';
                   const htmlContent = parsed.html || '';
                   const combined = textContent + ' ' + htmlContent;
+
+                  // DEBUG: mostra um trecho do texto puro pra conferirmos o formato real do e-mail
+                  console.log(`[DEBUG][${platform}] Trecho do texto (primeiros 300 chars): ${textContent.replace(/\s+/g, ' ').slice(0, 300)}`);
+
                   let code = extractCode(combined, platform);
+                  console.log(`[DEBUG][${platform}] Código achado direto no texto/html? ${code || 'NÃO'}`);
 
                   // Se não veio código no texto (ex: e-mail só tem um botão "Receber código"),
                   // tenta achar e seguir esse link automaticamente.
                   if (!code) {
                     code = await buscarCodigoViaLink(htmlContent, platform);
+                    console.log(`[DEBUG][${platform}] Código achado via link? ${code || 'NÃO'}`);
                   }
 
                   if (!code) return res(null);
