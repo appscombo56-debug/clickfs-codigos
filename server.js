@@ -1,27 +1,3 @@
-Perfeito! Essa imagem do inspetor tirou a dúvida exata de como a Netflix renderiza a página do código.
-
-Como podemos ver na estrutura do HTML:
-
-```html
-<div data-uia="travel-verification-otp" class="challenge-code">6263</div>
-
-```
-
-A Netflix usa o atributo `data-uia="travel-verification-otp"` ou a classe `challenge-code` para colocar o código de 4 dígitos!
-
-Com essa informação cirúrgica, ajustei a função `buscarCodigoViaLink` no `server.js` para ir **direto** nesse elemento com o Cheerio. Isso deixa a busca 100% precisa e rápida.
-
----
-
-### 🛠️ O que mudou no código:
-
-* **Busca Direta por Atributo/Classe:** Agora o Cheerio busca especificamente `[data-uia="travel-verification-otp"]` e `.challenge-code`, pegando o texto exato (`6263`) sem chance de errar ou pegar outros números da página.
-
----
-
-### 📄 Código Atualizado (`server.js`)
-
-```javascript
 const express = require('express');
 const cors = require('cors');
 const Imap = require('imap');
@@ -387,5 +363,3 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`ClickFS server rodando na porta ${PORT}`));
-
-```
