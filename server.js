@@ -11,46 +11,47 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// Remetentes esperados por plataforma
+// Remetentes esperados por plataforma (Restaurados para Max e Prime Video)
 const STREAMING_SENDERS = {
-  netflix:   ['netflix.com'],
-  disney:    ['disneyplus.com', 'disney.com'],
-  max:       ['max.com', 'hbomax.com'],
-  primevideo: ['amazon.com', 'primevideo.com'],
+  netflix:    ['netflix.com'],
+  disney:     ['disneyplus.com', 'disney.com'],
+  max:        ['no-reply@max.com', 'hbomax@mail.hbomax.com', 'max@email.max.com'],
+  primevideo: ['account-update@amazon.com', 'no-reply@amazon.com', 'auto-confirm@amazon.com', 'primevideo@amazon.com'],
 };
 
-// Padrões atualizados e flexibilizados por plataforma
+// Padrões para extrair código (Max e Prime originais; Netflix e Disney otimizadas)
 const CODE_PATTERNS_BY_PLATFORM = {
   netflix: [
-    // Padrão específico para pegar números de 4 dígitos isolados em tags HTML (ex: <td ...> 0929 </td>)
     /<td[^>]*>\s*(\d{4})\s*<\/td>/gi,
-    // Padrões textuais flexíveis (4 dígitos)
     /(?:c[oó]digo|c[oó]digo de acesso|access code|utilize|use)[^\d]{0,100}\b(\d{4})\b/gi,
     /acesso tempor[aá]rio[^\d]{0,100}\b(\d{4})\b/gi,
-    // Busca por qualquer sequência de 4 dígitos próximos à palavra código/code
     /\b(\d{4})\b/gi, 
   ],
   disney: [
-    // Padrão específico para pegar números de 6 dígitos isolados em tags HTML (ex: <td ...> 977081 </td>)
     /<td[^>]*>\s*(\d{6})\s*<\/td>/gi,
-    // Padrões textuais flexíveis (6 dígitos)
     /(?:c[oó]digo|c[oó]digo de verifica[cç][aã]o|passcode|code|security code)[^\d]{0,100}\b(\d{6})\b/gi,
     /\b(\d{6})\b/gi,
   ],
   max: [
-    /(?:insira este c[oó]digo|c[oó]digo|enter this code)[^\d]{0,50}\b(\d{6})\b/gi,
-    /\b(\d{6})\b/gi,
+    /insira este c[oó]digo[^\d]{0,25}(\d\s?\d\s?\d\s?\d\s?\d\s?\d)\b/gi,
+    /c[oó]digo[^\d]{0,25}(\d\s?\d\s?\d\s?\d\s?\d\s?\d)\b/gi,
+    /enter this code[^\d]{0,25}(\d\s?\d\s?\d\s?\d\s?\d\s?\d)\b/gi,
   ],
   primevideo: [
-    /(?:verificar sua identidade|c[oó]digo de verifica[cç][aã]o|verification code|one[- ]?time password|otp)[^\d]{0,50}\b(\d{6})\b/gi,
-    /\b(\d{6})\b/gi,
+    /verificar sua identidade[^\d]{0,40}(\d\s?\d\s?\d\s?\d\s?\d\s?\d)\b/gi,
+    /c[oó]digo de verifica[cç][aã]o[^\d]{0,25}(\d\s?\d\s?\d\s?\d\s?\d\s?\d)\b/gi,
+    /verification code[^\d]{0,25}(\d\s?\d\s?\d\s?\d\s?\d\s?\d)\b/gi,
+    /one[- ]?time password[^\d]{0,25}(\d\s?\d\s?\d\s?\d\s?\d\s?\d)\b/gi,
+    /c[oó]digo[^\d]{0,25}(\d\s?\d\s?\d\s?\d\s?\d\s?\d)\b/gi,
   ],
 };
 
-// Fallback genérico para capturar 4 ou 6 dígitos
+// Fallback genérico original
 const GENERIC_FALLBACK = [
-  /\b(\d{6})\b/g,
-  /\b(\d{4})\b/g,
+  /c[oó]digo[:\s]+(\d\s?\d\s?\d\s?\d\s?\d\s?\d)\b/gi,
+  /c[oó]digo[:\s]+(\d\s?\d\s?\d\s?\d)\b/gi,
+  /code[:\s]+(\d\s?\d\s?\d\s?\d\s?\d\s?\d)\b/gi,
+  /code[:\s]+(\d\s?\d\s?\d\s?\d)\b/gi,
 ];
 
 function pareceAno(numeroLimpo) {
@@ -59,63 +60,52 @@ function pareceAno(numeroLimpo) {
 }
 
 function extractCode(htmlContent, textContent, platform) {
-  // 1. Tentar extrair diretamente no HTML usando Cheerio (Análise Estrutural exata)
-  if (htmlContent) {
+  // Para Netflix e Disney, usa a busca direta em HTML/Cheerio para capturar a tag <td>
+  if (htmlContent && (platform === 'netflix' || platform === 'disney')) {
     const $ = cheerio.load(htmlContent);
     
-    // Netflix: procura células TD que contêm exatamente 4 dígitos com ou sem espaços
     if (platform === 'netflix') {
       let result = null;
       $('td').each((_, el) => {
         const text = $(el).text().trim();
         if (/^\d{4}$/.test(text) && !pareceAno(text)) {
           result = text;
-          return false; // quebra o loop
+          return false;
         }
       });
       if (result) return result;
     }
 
-    // Disney: procura células TD que contêm exatamente 6 dígitos
     if (platform === 'disney') {
       let result = null;
       $('td').each((_, el) => {
         const text = $(el).text().trim();
         if (/^\d{6}$/.test(text)) {
           result = text;
-          return false; // quebra o loop
+          return false;
         }
       });
       if (result) return result;
     }
   }
 
-  // 2. Tentar via Regex no HTML bruto para capturar marcas estruturais
+  // Lógica original de extração por texto limpo (para Max, Prime Video e fallback)
+  const textToSearch = textContent || htmlContent || '';
+  const clean = textToSearch.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
   const patternsEspecificos = CODE_PATTERNS_BY_PLATFORM[platform] || [];
   for (const pattern of patternsEspecificos) {
     pattern.lastIndex = 0;
-    const match = pattern.exec(htmlContent);
+    const match = pattern.exec(clean);
     if (match) {
       const numeroLimpo = match[1].replace(/\s+/g, '');
       if (!pareceAno(numeroLimpo)) return numeroLimpo;
     }
   }
 
-  // 3. Tentar no Texto limpo (Normalizado)
-  const cleanText = (textContent || htmlContent.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ');
-  for (const pattern of patternsEspecificos) {
-    pattern.lastIndex = 0;
-    const match = pattern.exec(cleanText);
-    if (match) {
-      const numeroLimpo = match[1].replace(/\s+/g, '');
-      if (!pareceAno(numeroLimpo)) return numeroLimpo;
-    }
-  }
-
-  // 4. Fallback Genérico
   for (const pattern of GENERIC_FALLBACK) {
     pattern.lastIndex = 0;
-    const match = pattern.exec(cleanText);
+    const match = pattern.exec(clean);
     if (match) {
       const numeroLimpo = match[1].replace(/\s+/g, '');
       if (!pareceAno(numeroLimpo)) return numeroLimpo;
@@ -204,7 +194,7 @@ function searchEmails(emailAddress, platform) {
         const yesterday = new Date();
         yesterday.setDate(yesterday.getDate() - 1);
 
-        const allowedDomains = STREAMING_SENDERS[platform] || [];
+        const senders = STREAMING_SENDERS[platform] || [];
         const searchCriteria = [
           ['SINCE', yesterday],
           ['TO', emailAddress],
@@ -235,9 +225,9 @@ function searchEmails(emailAddress, platform) {
                     return res(null);
                   }
 
-                  // Verificar remetente
+                  // Verificar remetente (Lógica original de split/domain)
                   const fromAddr = parsed.from?.value?.[0]?.address?.toLowerCase() || '';
-                  const isFromStreaming = allowedDomains.some(domain => fromAddr.includes(domain));
+                  const isFromStreaming = senders.length === 0 || senders.some(s => fromAddr.includes(s.includes('@') ? s.split('@')[1] : s));
 
                   if (!isFromStreaming) {
                     return res(null);
@@ -249,7 +239,6 @@ function searchEmails(emailAddress, platform) {
 
                   let code = extractCode(htmlContent, textContent, platform);
 
-                  // Fallback para e-mails que trazem botão de confirmação
                   if (!code) {
                     code = await buscarCodigoViaLink(htmlContent, platform);
                   }
