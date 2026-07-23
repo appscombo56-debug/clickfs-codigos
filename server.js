@@ -11,15 +11,15 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// Remetentes esperados por plataforma (Restaurados para Max e Prime Video)
+// Remetentes esperados por plataforma
 const STREAMING_SENDERS = {
   netflix:    ['netflix.com'],
-  disney:     ['disneyplus.com', 'disney.com'],
+  disney:     ['disneyplus.com', 'disney.com', 'mail.disneyplus.com', 'emails.disneyplus.com'],
   max:        ['no-reply@max.com', 'hbomax@mail.hbomax.com', 'max@email.max.com'],
   primevideo: ['account-update@amazon.com', 'no-reply@amazon.com', 'auto-confirm@amazon.com', 'primevideo@amazon.com'],
 };
 
-// Padrões para extrair código (Max e Prime originais; Netflix e Disney otimizadas)
+// Padrões para extrair código
 const CODE_PATTERNS_BY_PLATFORM = {
   netflix: [
     /<td[^>]*>\s*(\d{4})\s*<\/td>/gi,
@@ -28,9 +28,11 @@ const CODE_PATTERNS_BY_PLATFORM = {
     /\b(\d{4})\b/gi, 
   ],
   disney: [
+    // Captura exata dos 6 dígitos dentro de tags HTML (como no HTML enviado)
     /<td[^>]*>\s*(\d{6})\s*<\/td>/gi,
-    /(?:c[oó]digo|c[oó]digo de verifica[cç][aã]o|passcode|code|security code)[^\d]{0,100}\b(\d{6})\b/gi,
-    /\b(\d{6})\b/gi,
+    /c[oó]digo[^\d]{0,50}(\d{6})\b/gi,
+    /security code[^\d]{0,50}(\d{6})\b/gi,
+    /passcode[^\d]{0,50}(\d{6})\b/gi,
   ],
   max: [
     /insira este c[oó]digo[^\d]{0,25}(\d\s?\d\s?\d\s?\d\s?\d\s?\d)\b/gi,
@@ -60,14 +62,14 @@ function pareceAno(numeroLimpo) {
 }
 
 function extractCode(htmlContent, textContent, platform) {
-  // Para Netflix e Disney, usa a busca direta em HTML/Cheerio para capturar a tag <td>
+  // 1. Busca Direta Estruturada via Cheerio para Netflix e Disney
   if (htmlContent && (platform === 'netflix' || platform === 'disney')) {
     const $ = cheerio.load(htmlContent);
     
     if (platform === 'netflix') {
       let result = null;
       $('td').each((_, el) => {
-        const text = $(el).text().trim();
+        const text = $(el).text().trim().replace(/\s+/g, '');
         if (/^\d{4}$/.test(text) && !pareceAno(text)) {
           result = text;
           return false;
@@ -79,7 +81,8 @@ function extractCode(htmlContent, textContent, platform) {
     if (platform === 'disney') {
       let result = null;
       $('td').each((_, el) => {
-        const text = $(el).text().trim();
+        const text = $(el).text().trim().replace(/\s+/g, '');
+        // Procura estritamente a célula que contém apenas 6 dígitos
         if (/^\d{6}$/.test(text)) {
           result = text;
           return false;
@@ -89,7 +92,20 @@ function extractCode(htmlContent, textContent, platform) {
     }
   }
 
-  // Lógica original de extração por texto limpo (para Max, Prime Video e fallback)
+  // 2. Busca por Regex no HTML Bruto (captura os dados da tag mesmo que Cheerio falhe)
+  if (htmlContent) {
+    const patternsEspecificos = CODE_PATTERNS_BY_PLATFORM[platform] || [];
+    for (const pattern of patternsEspecificos) {
+      pattern.lastIndex = 0;
+      const match = pattern.exec(htmlContent);
+      if (match) {
+        const numeroLimpo = match[1].replace(/\s+/g, '');
+        if (!pareceAno(numeroLimpo)) return numeroLimpo;
+      }
+    }
+  }
+
+  // 3. Lógica original por Texto Limpo (para Max, Prime Video e fallbacks)
   const textToSearch = textContent || htmlContent || '';
   const clean = textToSearch.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 
@@ -225,7 +241,7 @@ function searchEmails(emailAddress, platform) {
                     return res(null);
                   }
 
-                  // Verificar remetente (Lógica original de split/domain)
+                  // Verificar remetente
                   const fromAddr = parsed.from?.value?.[0]?.address?.toLowerCase() || '';
                   const isFromStreaming = senders.length === 0 || senders.some(s => fromAddr.includes(s.includes('@') ? s.split('@')[1] : s));
 
