@@ -1,267 +1,323 @@
-require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const Imap = require('imap');
 const { simpleParser } = require('mailparser');
 const axios = require('axios');
 const cheerio = require('cheerio');
+require('dotenv').config();
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '64kb' }));
+app.use(express.json());
+app.use(express.static('public'));
 
-/* ---------------------------------------------------------------------------
- * Configuração por plataforma
- * ------------------------------------------------------------------------- */
-const PLATFORMS = {
-  netflix: {
-    senders: ['info@account.netflix.com', 'netflix@mailer.netflix.com', 'no-reply@netflix.com', 'help@netflix.com'],
-    codeLengths: [4, 8], // Netflix: PIN/acesso (4) ou ativação (8)
-    trustedDomains: ['netflix.com'],
-  },
-  disney: {
-    senders: ['disneyplus@mail.disneyplus.com', 'no-reply@disneyplus.com', 'disneyplus@emails.disneyplus.com', 'noreply@disneyplus.com'],
-    codeLengths: [6],
-    trustedDomains: ['disneyplus.com', 'disney.com', 'go.com'],
-  },
-  max: {
-    senders: ['no-reply@max.com', 'hbomax@mail.hbomax.com', 'max@email.max.com'],
-    codeLengths: [6],
-    trustedDomains: ['max.com', 'hbomax.com'],
-  },
-  primevideo: {
-    senders: ['account-update@amazon.com', 'no-reply@amazon.com', 'auto-confirm@amazon.com', 'primevideo@amazon.com'],
-    codeLengths: [6],
-    trustedDomains: ['amazon.com', 'amazon.com.br', 'primevideo.com'],
-  },
+// Remetentes esperados por plataforma
+const STREAMING_SENDERS = {
+  netflix:   ['netflix.com'],
+  disney:    ['disneyplus.com', 'disney.com'],
+  max:       ['max.com', 'hbomax.com'],
+  primevideo: ['amazon.com', 'primevideo.com'],
 };
 
-const VALID_PLATFORMS = Object.keys(PLATFORMS);
-const SEARCH_WINDOW_HOURS = 48;
-const MAX_EMAILS_FETCHED = 20;
+// Padrões atualizados e flexibilizados por plataforma
+const CODE_PATTERNS_BY_PLATFORM = {
+  netflix: [
+    // Padrão específico para pegar números de 4 dígitos isolados em tags HTML (ex: <td ...> 0929 </td>)
+    /<td[^>]*>\s*(\d{4})\s*<\/td>/gi,
+    // Padrões textuais flexíveis (4 dígitos)
+    /(?:c[oó]digo|c[oó]digo de acesso|access code|utilize|use)[^\d]{0,100}\b(\d{4})\b/gi,
+    /acesso tempor[aá]rio[^\d]{0,100}\b(\d{4})\b/gi,
+    // Busca por qualquer sequência de 4 dígitos próximos à palavra código/code
+    /\b(\d{4})\b/gi, 
+  ],
+  disney: [
+    // Padrão específico para pegar números de 6 dígitos isolados em tags HTML (ex: <td ...> 977081 </td>)
+    /<td[^>]*>\s*(\d{6})\s*<\/td>/gi,
+    // Padrões textuais flexíveis (6 dígitos)
+    /(?:c[oó]digo|c[oó]digo de verifica[cç][aã]o|passcode|code|security code)[^\d]{0,100}\b(\d{6})\b/gi,
+    /\b(\d{6})\b/gi,
+  ],
+  max: [
+    /(?:insira este c[oó]digo|c[oó]digo|enter this code)[^\d]{0,50}\b(\d{6})\b/gi,
+    /\b(\d{6})\b/gi,
+  ],
+  primevideo: [
+    /(?:verificar sua identidade|c[oó]digo de verifica[cç][aã]o|verification code|one[- ]?time password|otp)[^\d]{0,50}\b(\d{6})\b/gi,
+    /\b(\d{6})\b/gi,
+  ],
+};
 
-/* ---------------------------------------------------------------------------
- * Utilidades de texto
- * ------------------------------------------------------------------------- */
-function decodeEntities(str) {
-  if (!str) return '';
-  return str
-    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, n) => String.fromCharCode(parseInt(n, 16)))
-    .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"');
+// Fallback genérico para capturar 4 ou 6 dígitos
+const GENERIC_FALLBACK = [
+  /\b(\d{6})\b/g,
+  /\b(\d{4})\b/g,
+];
+
+function pareceAno(numeroLimpo) {
+  const n = parseInt(numeroLimpo, 10);
+  return numeroLimpo.length === 4 && n >= 1900 && n <= 2099;
 }
 
-function cleanHtml(html) {
-  if (!html) return '';
-  const noStyles = html.replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ');
-  return decodeEntities(noStyles).replace(/[\u00A0\t]+/g, ' ').replace(/\s+/g, ' ').trim();
-}
+function extractCode(htmlContent, textContent, platform) {
+  // 1. Tentar extrair diretamente no HTML usando Cheerio (Análise Estrutural exata)
+  if (htmlContent) {
+    const $ = cheerio.load(htmlContent);
+    
+    // Netflix: procura células TD que contêm exatamente 4 dígitos com ou sem espaços
+    if (platform === 'netflix') {
+      let result = null;
+      $('td').each((_, el) => {
+        const text = $(el).text().trim();
+        if (/^\d{4}$/.test(text) && !pareceAno(text)) {
+          result = text;
+          return false; // quebra o loop
+        }
+      });
+      if (result) return result;
+    }
 
-function cleanDigits(raw) {
-  return (raw || '').replace(/[\s\u00A0\-]/g, '');
-}
-
-function looksLikeYear(digits) {
-  if (digits.length !== 4) return false;
-  const n = parseInt(digits, 10);
-  return n >= 1900 && n <= 2099;
-}
-
-/* ---------------------------------------------------------------------------
- * Extração via DOM — a Netflix coloca o código num <td class="lrg-number">
- * sem a palavra "código" por perto, então o regex textual não pega.
- * ------------------------------------------------------------------------- */
-function extractCodeFromHtml(html, platform) {
-  if (!html) return null;
-  const $ = cheerio.load(html);
-  const expectedLengths = PLATFORMS[platform]?.codeLengths || [4, 6, 8];
-
-  const selectors = [];
-  if (platform === 'netflix') {
-    selectors.push('.lrg-number', '[class*="lrg-number"]', '[class*="code-number"]');
-  }
-  selectors.push('[class*="verification-code"]', '[class*="otp-code"]', '[class*="access-code"]');
-
-  for (const sel of selectors) {
-    const found = $(sel).first().text();
-    const digits = cleanDigits(found);
-    if (expectedLengths.includes(digits.length) && !looksLikeYear(digits)) {
-      console.log(`[DEBUG][${platform}] código encontrado via seletor "${sel}": ${digits}`);
-      return digits;
+    // Disney: procura células TD que contêm exatamente 6 dígitos
+    if (platform === 'disney') {
+      let result = null;
+      $('td').each((_, el) => {
+        const text = $(el).text().trim();
+        if (/^\d{6}$/.test(text)) {
+          result = text;
+          return false; // quebra o loop
+        }
+      });
+      if (result) return result;
     }
   }
+
+  // 2. Tentar via Regex no HTML bruto para capturar marcas estruturais
+  const patternsEspecificos = CODE_PATTERNS_BY_PLATFORM[platform] || [];
+  for (const pattern of patternsEspecificos) {
+    pattern.lastIndex = 0;
+    const match = pattern.exec(htmlContent);
+    if (match) {
+      const numeroLimpo = match[1].replace(/\s+/g, '');
+      if (!pareceAno(numeroLimpo)) return numeroLimpo;
+    }
+  }
+
+  // 3. Tentar no Texto limpo (Normalizado)
+  const cleanText = (textContent || htmlContent.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ');
+  for (const pattern of patternsEspecificos) {
+    pattern.lastIndex = 0;
+    const match = pattern.exec(cleanText);
+    if (match) {
+      const numeroLimpo = match[1].replace(/\s+/g, '');
+      if (!pareceAno(numeroLimpo)) return numeroLimpo;
+    }
+  }
+
+  // 4. Fallback Genérico
+  for (const pattern of GENERIC_FALLBACK) {
+    pattern.lastIndex = 0;
+    const match = pattern.exec(cleanText);
+    if (match) {
+      const numeroLimpo = match[1].replace(/\s+/g, '');
+      if (!pareceAno(numeroLimpo)) return numeroLimpo;
+    }
+  }
+
   return null;
 }
 
-/* ---------------------------------------------------------------------------
- * Extração do código (texto)
- * ------------------------------------------------------------------------- */
-const CODE_REGEX = /(?:c[oó]digo(?:\s+(?:de\s+)?(?:acesso|verifica[cç][aã]o|temporal|tempor[aá]rio|seguran[cç]a|seguranca|acesso\s+tempor[aá]rio))?|temporary\s+access\s+code|access\s+code|verification\s+code|security\s+code|one[-\s]?time\s+(?:passcode|password|code)|use\s+(?:este\s+)?c[oó]digo|insira\s+(?:este\s+)?c[oó]digo)[\s:.\u00A0\-]{0,40}((?:\d[\s\u00A0]?){4,8})\b/gi;
+// Domínios confiáveis por plataforma
+const DOMINIOS_CONFIAVEIS = {
+  netflix:    ['netflix.com'],
+  disney:     ['disneyplus.com', 'disney.com'],
+  max:        ['max.com', 'hbomax.com'],
+  primevideo: ['amazon.com', 'amazon.com.br', 'primevideo.com'],
+};
 
-function extractCode(text, platform) {
-  const clean = cleanHtml(text);
-  if (!clean) return null;
-  const expectedLengths = PLATFORMS[platform]?.codeLengths || [4, 6, 8];
-
-  CODE_REGEX.lastIndex = 0;
-  let match;
-  while ((match = CODE_REGEX.exec(clean)) !== null) {
-    const digits = cleanDigits(match[1]);
-    if (expectedLengths.includes(digits.length) && !looksLikeYear(digits)) return digits;
-  }
-
-  const fallback = /(?:c[oó]digo|code)\s*[:=]\s*((?:\d[\s\u00A0]?){4,8})\b/gi;
-  fallback.lastIndex = 0;
-  while ((match = fallback.exec(clean)) !== null) {
-    const digits = cleanDigits(match[1]);
-    if (expectedLengths.includes(digits.length) && !looksLikeYear(digits)) return digits;
-  }
-  return null;
-}
-
-/* ---------------------------------------------------------------------------
- * Seguir link de "receber código"
- * ------------------------------------------------------------------------- */
-function isTrustedLink(url, platform) {
+function linkEhConfiavel(url, platform) {
   try {
     const host = new URL(url).hostname.toLowerCase();
-    return (PLATFORMS[platform].trustedDomains || []).some((d) => host === d || host.endsWith('.' + d));
-  } catch { return false; }
+    const permitidos = DOMINIOS_CONFIAVEIS[platform] || [];
+    return permitidos.some(d => host === d || host.endsWith('.' + d));
+  } catch {
+    return false;
+  }
 }
 
-async function findCodeViaLink(htmlContent, platform) {
+async function buscarCodigoViaLink(htmlContent, platform) {
   if (!htmlContent) return null;
+
   const $ = cheerio.load(htmlContent);
   let link = null;
+
   $('a').each((_, el) => {
-    const text = $(el).text().trim().toLowerCase();
+    const texto = $(el).text().trim().toLowerCase();
     const href = $(el).attr('href');
-    if (href && /c[oó]digo|receber|obter|get\s+code|access/i.test(text)) { link = href; return false; }
+    if (href && /c[oó]digo|receber|get code|obter/.test(texto)) {
+      link = href;
+      return false;
+    }
   });
-  if (!link || !isTrustedLink(link, platform)) {
-    console.log(`[DEBUG][${platform}] Nenhum link confiável de código encontrado.`);
-    return null;
-  }
-  console.log(`[DEBUG][${platform}] Seguindo link confiável: ${link}`);
+
+  if (!link || !linkEhConfiavel(link, platform)) return null;
+
   try {
     const resp = await axios.get(link, {
-      timeout: 10000, maxRedirects: 5,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36' },
+      timeout: 10000,
+      maxRedirects: 5,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+      },
       validateStatus: () => true,
     });
     if (resp.status < 200 || resp.status >= 400) return null;
-    return extractCode(String(resp.data), platform);
+    return extractCode(String(resp.data), '', platform);
   } catch (e) {
-    console.log(`[DEBUG][${platform}] Erro ao seguir link: ${e.message}`);
     return null;
   }
 }
 
-/* ---------------------------------------------------------------------------
- * IMAP
- * ------------------------------------------------------------------------- */
-function parseEmail(stream) {
+function parseEmailAsync(stream) {
   return new Promise((resolve, reject) => {
-    simpleParser(stream, (err, parsed) => { if (err) return reject(err); resolve(parsed); });
+    simpleParser(stream, (err, parsed) => {
+      if (err) return reject(err);
+      resolve(parsed);
+    });
   });
 }
 
 function searchEmails(emailAddress, platform) {
-  const cfg = PLATFORMS[platform];
   return new Promise((resolve, reject) => {
     const imap = new Imap({
       user: process.env.IMAP_USER,
       password: process.env.IMAP_PASS,
       host: process.env.IMAP_HOST || 'imail.hostinger.com',
-      port: parseInt(process.env.IMAP_PORT, 10) || 993,
-      tls: true, tlsOptions: { rejectUnauthorized: false },
-      authTimeout: 15000, connTimeout: 20000,
+      port: parseInt(process.env.IMAP_PORT) || 993,
+      tls: true,
+      tlsOptions: { rejectUnauthorized: false },
+      authTimeout: 10000,
     });
 
     imap.once('ready', () => {
-      imap.openBox('INBOX', true, (err) => {
+      imap.openBox('INBOX', false, async (err, box) => {
         if (err) { imap.end(); return reject(err); }
-        const since = new Date();
-        since.setHours(since.getHours() - SEARCH_WINDOW_HOURS);
-        imap.search([['SINCE', since]], (err, uids) => {
-          console.log(`[DEBUG][${platform}] IMAP SINCE ${since.toISOString()} -> ${uids ? uids.length : 0} e-mail(s).`);
-          if (err || !uids || uids.length === 0) { imap.end(); return resolve({ found: false, code: null }); }
-          const toFetch = uids.slice(-MAX_EMAILS_FETCHED).reverse();
+
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+
+        const allowedDomains = STREAMING_SENDERS[platform] || [];
+        const searchCriteria = [
+          ['SINCE', yesterday],
+          ['TO', emailAddress],
+        ];
+
+        imap.search(searchCriteria, (err, results) => {
+          if (err || !results || results.length === 0) {
+            imap.end();
+            return resolve({ found: false, code: null });
+          }
+
+          const toFetch = results.slice(-5).reverse();
           const fetch = imap.fetch(toFetch, { bodies: '' });
+
           const emailPromises = [];
 
           fetch.on('message', (msg) => {
-            emailPromises.push(new Promise((res) => {
+            const promise = new Promise((res) => {
               msg.on('body', async (stream) => {
                 try {
-                  const parsed = await parseEmail(stream);
-                  const toAddrs = (parsed.to?.value || []).map((v) => (v.address || '').toLowerCase());
-                  const fromAddr = (parsed.from?.value?.[0]?.address || '').toLowerCase();
-                  if (!toAddrs.some((a) => a === emailAddress.toLowerCase())) return res(null);
-                  if (!cfg.senders.some((s) => fromAddr.includes(s.split('@')[1]))) return res(null);
-                  console.log(`[DEBUG][${platform}] de="${fromAddr}" assunto="${parsed.subject}"`);
+                  const parsed = await parseEmailAsync(stream);
 
-                  let code = extractCodeFromHtml(parsed.html || '', platform);
-                  console.log(`[DEBUG][${platform}] código no DOM? ${code || 'NÃO'}`);
-                  if (!code) {
-                    const combined = `${parsed.text || ''} ${parsed.html || ''}`;
-                    code = extractCode(combined, platform);
-                    console.log(`[DEBUG][${platform}] código no texto? ${code || 'NÃO'}`);
+                  // Verificar destinatário
+                  const toAddresses = (parsed.to?.value || []).map(v => v.address.toLowerCase());
+                  const isForThisUser = toAddresses.some(addr => addr === emailAddress.toLowerCase());
+
+                  if (!isForThisUser) {
+                    return res(null);
                   }
-                  if (!code) {
-                    code = await findCodeViaLink(parsed.html || '', platform);
-                    console.log(`[DEBUG][${platform}] código via link? ${code || 'NÃO'}`);
+
+                  // Verificar remetente
+                  const fromAddr = parsed.from?.value?.[0]?.address?.toLowerCase() || '';
+                  const isFromStreaming = allowedDomains.some(domain => fromAddr.includes(domain));
+
+                  if (!isFromStreaming) {
+                    return res(null);
                   }
+
+                  // Extrair código
+                  const textContent = parsed.text || '';
+                  const htmlContent = parsed.html || '';
+
+                  let code = extractCode(htmlContent, textContent, platform);
+
+                  // Fallback para e-mails que trazem botão de confirmação
+                  if (!code) {
+                    code = await buscarCodigoViaLink(htmlContent, platform);
+                  }
+
                   if (!code) return res(null);
                   res({ code, date: parsed.date ? new Date(parsed.date).getTime() : 0 });
                 } catch (e) {
-                  console.log(`[DEBUG][${platform}] erro ao parsear e-mail: ${e.message}`);
                   res(null);
                 }
               });
-            }));
+            });
+            emailPromises.push(promise);
           });
 
           fetch.once('end', async () => {
             try {
-              const resultados = (await Promise.all(emailPromises)).filter(Boolean);
-              resultados.sort((a, b) => b.date - a.date);
-              const maisRecente = resultados[0] || null;
+              const resultados = await Promise.all(emailPromises);
+              const validos = resultados.filter(r => r !== null);
+              validos.sort((a, b) => b.date - a.date);
+              const maisRecente = validos[0] || null;
               imap.end();
               resolve({ found: !!maisRecente, code: maisRecente ? maisRecente.code : null });
-            } catch (e) { imap.end(); reject(e); }
+            } catch (e) {
+              imap.end();
+              reject(e);
+            }
           });
-          fetch.once('error', (err) => { imap.end(); reject(err); });
+
+          fetch.once('error', (err) => {
+            imap.end();
+            reject(err);
+          });
         });
       });
     });
+
     imap.once('error', (err) => reject(err));
     imap.connect();
   });
 }
 
-/* ---------------------------------------------------------------------------
- * Rotas
- * ------------------------------------------------------------------------- */
+// Rota principal
 app.post('/api/buscar', async (req, res) => {
-  const { email, platform } = req.body || {};
-  if (!email || !platform) return res.status(400).json({ error: 'E-mail e plataforma são obrigatórios.' });
-  if (!VALID_PLATFORMS.includes(platform)) return res.status(400).json({ error: 'Plataforma inválida.' });
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'E-mail inválido.' });
+  const { email, platform } = req.body;
+
+  if (!email || !platform) {
+    return res.status(400).json({ error: 'E-mail e plataforma são obrigatórios.' });
+  }
+
+  const validPlatforms = ['netflix', 'disney', 'max', 'primevideo'];
+  if (!validPlatforms.includes(platform)) {
+    return res.status(400).json({ error: 'Plataforma inválida.' });
+  }
+
   try {
     const result = await searchEmails(email, platform);
-    if (result.found && result.code) return res.json({ success: true, code: result.code });
-    return res.json({ success: false, message: `Nenhum código encontrado nas últimas ${SEARCH_WINDOW_HOURS}h para este e-mail.` });
+    if (result.found && result.code) {
+      return res.json({ success: true, code: result.code });
+    } else {
+      return res.json({ success: false, message: 'Nenhum código encontrado nas últimas 24h para este e-mail.' });
+    }
   } catch (err) {
     console.error('Erro IMAP:', err.message);
     return res.status(500).json({ error: 'Erro ao conectar ao servidor de e-mail. Tente novamente.' });
   }
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', platforms: VALID_PLATFORMS }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`ClickFS server rodando na porta ${PORT}`));
