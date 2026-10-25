@@ -6,6 +6,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 require('dotenv').config();
 const { montar, verificarAcesso } = require('./acesso');
+const { buscarNosParceiros } = require('./fallback');
 
 const app = express();
 app.use(cors());
@@ -371,27 +372,41 @@ app.post('/api/buscar', verificarAcesso, async (req, res) => {
     return res.status(400).json({ error: 'Plataforma inválida.' });
   }
 
+  // 1) Primeiro procura na SUA caixa de e-mail (IMAP)
+  let result = { found: false, code: null };
+  let erroImap = null;
   try {
-    const result = await searchEmails(email, platform);
-    if (result.found && result.code) {
-      return res.json({ success: true, code: result.code });
-    } else {
-      return res.json({ success: false, message: 'Nenhum código encontrado nas últimas 24h para este e-mail.' });
-    }
+    result = await searchEmails(email, platform);
   } catch (err) {
+    erroImap = err;
     console.error('Erro IMAP:', err.message);
+  }
+  if (result.found && result.code) {
+    return res.json({ success: true, code: result.code });
+  }
+
+  // 2) Não achou (ou o IMAP falhou): tenta os sites parceiros, um por vez
+  const alt = await buscarNosParceiros(email, platform, async (html, plat) =>
+    extractCode(html, '', plat) || (await buscarCodigoViaLink(html, plat))
+  );
+  if (alt) {
+    return res.json({ success: true, code: alt.code });
+  }
+
+  if (erroImap) {
     return res.status(500).json({ error: 'Erro ao conectar ao servidor de e-mail. Tente novamente.' });
   }
+  return res.json({ success: false, message: 'Nenhum código encontrado nas últimas 24h para este e-mail.' });
 });
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080; // Discloud exige a porta 8080
 
 // Liga o controle de acesso (banco + painel /admin) e só então abre o servidor
 montar(app)
   .then(() => {
-    app.listen(PORT, () => console.log(`ClickFS server rodando na porta ${PORT}`));
+    app.listen(PORT, '0.0.0.0', () => console.log(`ClickFS server rodando na porta ${PORT}`));
   })
   .catch((err) => {
     console.error('Falha ao iniciar o controle de acesso:', err.message);

@@ -249,7 +249,9 @@ admin.post('/api/contas/remover', async (req, res) => {
 // ---------- instalação no seu servidor ----------
 
 async function montar(app) {
-  app.set('trust proxy', 1); // Render fica atrás de proxy: necessário para pegar o IP real
+  // Hospedagem fica atrás de proxy: necessário para pegar o IP real do cliente.
+  // Se todos os acessos parecerem vir do mesmo IP, ajuste TRUST_PROXY no .env (ex.: 2).
+  app.set('trust proxy', Number(process.env.TRUST_PROXY || 1));
   await iniciarBanco();
   app.use('/admin', admin);
   await rotacionarVencidas();
