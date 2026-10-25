@@ -23,6 +23,8 @@ const STREAMING_SENDERS = {
 // Padrões para extrair código
 const CODE_PATTERNS_BY_PLATFORM = {
   netflix: [
+    /<td[^>]*lrg-number[^>]*>\s*(\d{4,6})\s*<\/td>/gi,
+    /<td[^>]*>\s*(\d{6})\s*<\/td>/gi,
     /<td[^>]*>\s*(\d{4})\s*<\/td>/gi,
     /(?:c[oó]digo|c[oó]digo de acesso|access code|utilize|use)[^\d]{0,100}\b(\d{4})\b/gi,
     /acesso tempor[aá]rio[^\d]{0,100}\b(\d{4})\b/gi,
@@ -67,6 +69,28 @@ function extractCode(htmlContent, textContent, platform) {
     
     if (platform === 'netflix') {
       let result = null;
+
+      // 1. Código em destaque do e-mail (classe lrg-number): 4 a 6 dígitos
+      $('td.lrg-number').each((_, el) => {
+        const text = $(el).text().trim().replace(/\s+/g, '');
+        if (/^\d{4,6}$/.test(text)) {
+          result = text;
+          return false;
+        }
+      });
+      if (result) return result;
+
+      // 2. Qualquer célula com exatamente 6 dígitos (código de verificação)
+      $('td').each((_, el) => {
+        const text = $(el).text().trim().replace(/\s+/g, '');
+        if (/^\d{6}$/.test(text)) {
+          result = text;
+          return false;
+        }
+      });
+      if (result) return result;
+
+      // 3. Célula com 4 dígitos (acesso temporário)
       $('td').each((_, el) => {
         const text = $(el).text().trim().replace(/\s+/g, '');
         if (/^\d{4}$/.test(text) && !pareceAno(text)) {
