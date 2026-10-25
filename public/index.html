@@ -230,7 +230,8 @@
       pointer-events: none;
     }
 
-    input[type="email"] {
+    input[type="email"],
+    input[type="text"] {
       width: 100%;
       background: var(--surface2);
       border: 1px solid var(--border);
@@ -243,12 +244,24 @@
       transition: all 0.2s ease;
     }
 
-    input[type="email"]:focus {
+    input[type="email"]:focus,
+    input[type="text"]:focus {
       border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(0,212,255,0.08);
     }
 
-    input[type="email"]::placeholder {
+    input[type="text"] {
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+
+    input[type="text"]::placeholder {
+      letter-spacing: 0;
+      text-transform: none;
+    }
+
+    input[type="email"]::placeholder,
+    input[type="text"]::placeholder {
       color: var(--muted);
     }
 
@@ -434,7 +447,7 @@
         <span class="logo-text">ClickFS</span>
       </div>
       <h1>Buscar Código</h1>
-      <p class="subtitle">Digite seu e-mail e selecione a plataforma</p>
+      <p class="subtitle">Digite seu e-mail, sua chave de acesso e selecione a plataforma</p>
     </div>
 
     <div class="card">
@@ -459,6 +472,14 @@
         <div class="input-wrapper">
           <span class="input-icon">✉</span>
           <input type="email" id="emailInput" placeholder="seuemail@exemplo.com" autocomplete="email" />
+        </div>
+      </div>
+
+      <div class="input-group">
+        <p class="section-label">Chave de Acesso</p>
+        <div class="input-wrapper">
+          <span class="input-icon">🔑</span>
+          <input type="text" id="chaveInput" placeholder="Ex.: K7M29Q" maxlength="6" autocomplete="off" spellcheck="false" />
         </div>
       </div>
 
@@ -551,9 +572,15 @@
 
     async function buscarCodigo() {
       const email = document.getElementById('emailInput').value.trim();
+      const chave = document.getElementById('chaveInput').value.trim();
 
       if (!email) {
         document.getElementById('emailInput').focus();
+        return;
+      }
+
+      if (!chave) {
+        document.getElementById('chaveInput').focus();
         return;
       }
 
@@ -575,12 +602,13 @@
         const response = await fetch('/api/buscar', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, platform: selectedPlatform }),
+          body: JSON.stringify({ email, chave, platform: selectedPlatform }),
         });
 
         const data = await response.json();
 
         if (data.success && data.code) {
+          try { localStorage.setItem('clickfs_acesso', JSON.stringify({ email, chave })); } catch (_) {}
           showResult(true, data.code);
         } else {
           showResult(false, null, data.message || data.error || 'Código não encontrado.');
@@ -593,9 +621,20 @@
     }
 
     // Enter key support
-    document.getElementById('emailInput').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') buscarCodigo();
+    ['emailInput', 'chaveInput'].forEach((id) => {
+      document.getElementById(id).addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') buscarCodigo();
+      });
     });
+
+    // Lembra e-mail e chave do último acesso bem-sucedido neste aparelho
+    try {
+      const salvo = JSON.parse(localStorage.getItem('clickfs_acesso') || 'null');
+      if (salvo) {
+        document.getElementById('emailInput').value = salvo.email || '';
+        document.getElementById('chaveInput').value = salvo.chave || '';
+      }
+    } catch (_) {}
   </script>
 </body>
 </html>
