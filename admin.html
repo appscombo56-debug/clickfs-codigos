@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>ClickFS Admin</title>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Syne:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #060810; --surface: #0d1117; --surface2: #111827;
+      --border: rgba(99,202,255,0.12); --accent: #00d4ff; --accent2: #0077ff;
+      --text: #e8f4ff; --muted: #5a7a99; --error: #ff4d6d; --success: #00ffb3; --warn: #ffb020;
+    }
+    body { background: var(--bg); color: var(--text); font-family: 'Syne', sans-serif; min-height: 100vh; padding: 24px 16px 60px; }
+    .wrap { max-width: 980px; margin: 0 auto; }
+    h1 { font-family: 'Orbitron', monospace; font-size: 22px; margin-bottom: 4px; }
+    h1 span { color: var(--accent); }
+    .sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 20px; margin-bottom: 20px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; }
+    input { flex: 1; min-width: 160px; background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; color: var(--text); font-family: inherit; font-size: 14px; outline: none; }
+    input:focus { border-color: var(--accent); }
+    input.dias { flex: 0 0 90px; min-width: 90px; }
+    button { background: linear-gradient(135deg, var(--accent2), var(--accent)); border: none; border-radius: 10px; padding: 12px 18px; color: #fff; font-family: inherit; font-weight: 600; font-size: 13px; cursor: pointer; }
+    button.ghost { background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; font-size: 12px; }
+    button.ghost:hover { border-color: var(--accent); }
+    button.danger { color: var(--error); }
+    .msg { font-size: 13px; margin-top: 10px; min-height: 18px; }
+    .msg.err { color: var(--error); } .msg.ok { color: var(--success); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+    td { padding: 12px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    .chave { font-family: 'Orbitron', monospace; font-size: 12px; letter-spacing: 1px; color: var(--accent); }
+    .tag { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+    .tag.ativa { background: rgba(0,255,179,0.1); color: var(--success); }
+    .tag.breve { background: rgba(255,176,32,0.12); color: var(--warn); }
+    .tag.vencida { background: rgba(255,77,109,0.1); color: var(--error); }
+    .acoes { display: flex; gap: 6px; flex-wrap: wrap; }
+    .vazio { color: var(--muted); text-align: center; padding: 30px 0; font-size: 13px; }
+    #login { max-width: 380px; margin: 14vh auto 0; }
+    .scroll { overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+
+    <div id="login" class="card" style="display:none">
+      <h1>Click<span>FS</span> Admin</h1>
+      <p class="sub">Digite a senha do painel</p>
+      <div class="row">
+        <input type="password" id="senha" placeholder="Senha" autocomplete="current-password" />
+        <button onclick="entrar()">Entrar</button>
+      </div>
+      <p class="msg err" id="loginMsg"></p>
+    </div>
+
+    <div id="painel" style="display:none">
+      <h1>Click<span>FS</span> Admin</h1>
+      <p class="sub">Contas de streaming, chaves de acesso e vencimentos</p>
+
+      <div class="card">
+        <p class="sub" style="margin-bottom:12px">Nova conta</p>
+        <div class="row">
+          <input type="email" id="novoEmail" placeholder="e-mail da conta (ex.: netflix01@gmail.com)" />
+          <input type="number" id="novoDias" class="dias" value="30" min="1" max="365" title="Dias de acesso" />
+          <button onclick="cadastrar()">Cadastrar</button>
+        </div>
+        <p class="msg" id="novoMsg"></p>
+      </div>
+
+      <div class="card">
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr><th>Conta</th><th>Chave</th><th>Vence em</th><th>Status</th><th>Ações</th></tr>
+            </thead>
+            <tbody id="lista"></tbody>
+          </table>
+        </div>
+        <p class="vazio" id="vazio" style="display:none">Nenhuma conta cadastrada ainda.</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let senha = sessionStorage.getItem('clickfs_admin') || '';
+
+    async function api(caminho, corpo) {
+      const r = await fetch('/admin/api' + caminho, {
+        method: corpo ? 'POST' : 'GET',
+        headers: { 'Content-Type': 'application/json', 'x-admin-password': senha },
+        body: corpo ? JSON.stringify(corpo) : undefined,
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw Object.assign(new Error(d.erro || 'Erro'), { status: r.status });
+      return d;
+    }
+
+    function mostrarLogin(msg) {
+      document.getElementById('painel').style.display = 'none';
+      document.getElementById('login').style.display = 'block';
+      document.getElementById('loginMsg').textContent = msg || '';
+    }
+
+    async function entrar() {
+      senha = document.getElementById('senha').value;
+      try {
+        await api('/contas');
+        sessionStorage.setItem('clickfs_admin', senha);
+        iniciar();
+      } catch (e) {
+        mostrarLogin(e.message);
+      }
+    }
+    document.getElementById('senha').addEventListener('keydown', (e) => { if (e.key === 'Enter') entrar(); });
+
+    function fmtData(iso) {
+      return new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
+    function status(c) {
+      const ms = new Date(c.expires_at) - Date.now();
+      const dias = Math.ceil(ms / 86400000);
+      if (ms <= 0) return { cls: 'vencida', txt: 'Vencida · chave trocada' };
+      if (dias <= 3) return { cls: 'breve', txt: `Vence em ${dias} dia${dias > 1 ? 's' : ''}` };
+      return { cls: 'ativa', txt: `Ativa · ${dias} dias` };
+    }
+
+    function botao(texto, fn, extra) {
+      const b = document.createElement('button');
+      b.className = 'ghost ' + (extra || '');
+      b.textContent = texto;
+      b.onclick = fn;
+      return b;
+    }
+
+    async function copiar(texto, btn) {
+      await navigator.clipboard.writeText(texto);
+      const antes = btn.textContent;
+      btn.textContent = 'Copiado ✓';
+      setTimeout(() => (btn.textContent = antes), 1500);
+    }
+
+    async function listar() {
+      const contas = await api('/contas');
+      const tbody = document.getElementById('lista');
+      tbody.innerHTML = '';
+      document.getElementById('vazio').style.display = contas.length ? 'none' : 'block';
+
+      for (const c of contas) {
+        const st = status(c);
+        const tr = document.createElement('tr');
+
+        const tdEmail = document.createElement('td'); tdEmail.textContent = c.email;
+        const tdChave = document.createElement('td'); tdChave.className = 'chave'; tdChave.textContent = c.chave;
+        const tdVence = document.createElement('td'); tdVence.textContent = fmtData(c.expires_at);
+        const tdSt = document.createElement('td');
+        const tag = document.createElement('span'); tag.className = 'tag ' + st.cls; tag.textContent = st.txt;
+        tdSt.appendChild(tag);
+
+        const tdAc = document.createElement('td');
+        const ac = document.createElement('div'); ac.className = 'acoes';
+
+        const bCopiar = botao('Copiar acesso', () =>
+          copiar(`Seu acesso ClickFS Códigos\nE-mail da conta: ${c.email}\nChave de acesso: ${c.chave}\nVálido até: ${fmtData(c.expires_at)}`, bCopiar));
+        ac.appendChild(bCopiar);
+        ac.appendChild(botao('Renovar +30d', async () => { await api('/contas/renovar', { email: c.email, dias: 30 }); listar(); }));
+        ac.appendChild(botao('Trocar chave', async () => {
+          if (confirm('Trocar a chave agora? A atual deixa de funcionar na hora.')) { await api('/contas/trocar-chave', { email: c.email }); listar(); }
+        }));
+        ac.appendChild(botao('Remover', async () => {
+          if (confirm(`Remover ${c.email}?`)) { await api('/contas/remover', { email: c.email }); listar(); }
+        }, 'danger'));
+        tdAc.appendChild(ac);
+
+        tr.append(tdEmail, tdChave, tdVence, tdSt, tdAc);
+        tbody.appendChild(tr);
+      }
+    }
+
+    async function cadastrar() {
+      const msg = document.getElementById('novoMsg');
+      try {
+        const c = await api('/contas', {
+          email: document.getElementById('novoEmail').value,
+          dias: document.getElementById('novoDias').value,
+        });
+        msg.className = 'msg ok';
+        msg.textContent = `Cadastrada! Chave: ${c.chave}`;
+        document.getElementById('novoEmail').value = '';
+        listar();
+      } catch (e) {
+        msg.className = 'msg err';
+        msg.textContent = e.message;
+      }
+    }
+
+    async function iniciar() {
+      document.getElementById('login').style.display = 'none';
+      document.getElementById('painel').style.display = 'block';
+      try { await listar(); } catch (e) { sessionStorage.removeItem('clickfs_admin'); mostrarLogin(e.message); }
+    }
+
+    if (senha) iniciar(); else mostrarLogin();
+  </script>
+</body>
+</html>
